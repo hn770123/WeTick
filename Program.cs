@@ -299,6 +299,29 @@ app.MapGet("/", (HttpContext context) =>
             <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
         </div>
 
+        <!-- グループ管理セクション -->
+        <div class="card">
+            <h2>👥 所属グループ管理</h2>
+            <div id="groups-list" style="margin-bottom: 15px;">読み込み中...</div>
+            <hr style="border: 0; border-top: 1px solid #edf2f7; margin: 15px 0;">
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                <form id="create-group-form" onsubmit="createGroup(event)" style="flex: 1; min-width: 250px;">
+                    <div class="form-group">
+                        <label for="group-name">新規グループ作成</label>
+                        <input type="text" id="group-name" required placeholder="例: 家族チーム, 開発部">
+                    </div>
+                    <button type="submit" class="btn">グループを作成</button>
+                </form>
+                <form id="join-group-form" onsubmit="joinGroup(event)" style="flex: 1; min-width: 250px;">
+                    <div class="form-group">
+                        <label for="invite-code">招待コードで参加</label>
+                        <input type="text" id="invite-code" required placeholder="例: A1B2C3D4">
+                    </div>
+                    <button type="submit" class="btn btn-success">グループに参加</button>
+                </form>
+            </div>
+        </div>
+
         <!-- 習慣登録フォーム -->
         <div class="card">
             <h2>新しい習慣を登録</h2>
@@ -334,7 +357,15 @@ app.MapGet("/", (HttpContext context) =>
 
         <!-- タイムライン -->
         <div class="card">
-            <h2>👥 みんなのタイムライン</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h2 style="margin: 0;">👥 タイムライン</h2>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label for="group-filter" style="font-weight: bold;">表示フィルタ:</label>
+                    <select id="group-filter" onchange="loadTimeline()" style="padding: 6px 12px; border: 1px solid #cbd5e0; border-radius: 6px;">
+                        <option value="all">すべての投稿</option>
+                    </select>
+                </div>
+            </div>
             <div id="timeline-list">読み込み中...</div>
         </div>
 
@@ -433,8 +464,97 @@ app.MapGet("/", (HttpContext context) =>
                 }
             }
 
+            let userGroups = [];
+
+            async function loadGroups() {
+                const res = await fetch(`/api/groups?userId=${USER_ID}`);
+                if (!res.ok) return;
+                userGroups = await res.json();
+
+                const container = document.getElementById('groups-list');
+                const filterSelect = document.getElementById('group-filter');
+
+                const currentFilter = filterSelect.value;
+                filterSelect.innerHTML = '<option value="all">すべての投稿</option>';
+
+                if (!userGroups || userGroups.length === 0) {
+                    container.innerHTML = '<p style="color: #718096;">所属しているグループはありません。</p>';
+                    return;
+                }
+
+                container.innerHTML = userGroups.map(g => `
+                    <div style="background: #f7fafc; padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>🏢 ${escapeHtml(g.name)}</strong>
+                        </div>
+                        <div>
+                            <span style="font-size: 0.85em; background: #e2e8f0; padding: 4px 8px; border-radius: 4px; color: #4a5568;">
+                                招待コード: <strong>${escapeHtml(g.inviteCode)}</strong>
+                            </span>
+                        </div>
+                    </div>
+                `).join('');
+
+                userGroups.forEach(g => {
+                    const option = document.createElement('option');
+                    option.value = g.id;
+                    option.textContent = `🏢 ${g.name}`;
+                    filterSelect.appendChild(option);
+                });
+
+                if (userGroups.some(g => g.id.toString() === currentFilter)) {
+                    filterSelect.value = currentFilter;
+                }
+            }
+
+            async function createGroup(e) {
+                e.preventDefault();
+                const name = document.getElementById('group-name').value;
+                const res = await fetch('/api/groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: USER_ID, name })
+                });
+
+                if (res.ok) {
+                    const newGroup = await res.json();
+                    document.getElementById('create-group-form').reset();
+                    alert(`🎉 グループ「${newGroup.name}」を作成しました！\n招待コード: ${newGroup.inviteCode}`);
+                    await loadGroups();
+                } else {
+                    const err = await res.json();
+                    alert(err.message || 'グループの作成に失敗しました。');
+                }
+            }
+
+            async function joinGroup(e) {
+                e.preventDefault();
+                const inviteCode = document.getElementById('invite-code').value;
+                const res = await fetch('/api/groups/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: USER_ID, inviteCode })
+                });
+
+                if (res.ok) {
+                    const result = await res.json();
+                    document.getElementById('join-group-form').reset();
+                    alert(`🎉 ${result.message}`);
+                    await loadGroups();
+                    loadTimeline();
+                } else {
+                    const err = await res.json();
+                    alert(err.message || 'グループへの参加に失敗しました。');
+                }
+            }
+
             async function loadTimeline() {
-                const res = await fetch(`/api/timeline?limit=15`);
+                const selectedGroupId = document.getElementById('group-filter')?.value || 'all';
+                const endpoint = selectedGroupId === 'all'
+                    ? `/api/timeline?limit=15`
+                    : `/api/groups/${selectedGroupId}/timeline?limit=15`;
+
+                const res = await fetch(endpoint);
                 const items = await res.json();
                 const container = document.getElementById('timeline-list');
 
@@ -494,6 +614,7 @@ app.MapGet("/", (HttpContext context) =>
 
             // 初期ロード
             loadUser();
+            loadGroups();
             loadHabits();
             loadTimeline();
         </script>
@@ -764,6 +885,198 @@ app.MapGet("/api/logs", (int? userId, int? limit) =>
 });
 
 // ------------------------------------------------------------
+// グループ管理 API エンドポイント
+// ------------------------------------------------------------
+
+/// <summary>
+/// 新しいグループを作成し、作成者を管理者（Admin）としてグループに自動追加します。
+/// </summary>
+app.MapPost("/api/groups", (CreateGroupDto dto) =>
+{
+    if (string.IsNullOrWhiteSpace(dto.Name))
+    {
+        return Results.BadRequest(new { message = "グループ名は必須項目です。" });
+    }
+
+    string inviteCode = Guid.NewGuid().ToString("N")[..8].ToUpper();
+    string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+    using var connection = new SqliteConnection(connectionString);
+    connection.Open();
+    using var transaction = connection.BeginTransaction();
+
+    string insertGroupSql = @"
+        INSERT INTO Groups (Name, InviteCode, CreatedAt)
+        VALUES (@Name, @InviteCode, @CreatedAt);
+        SELECT last_insert_rowid();";
+
+    int groupId = connection.ExecuteScalar<int>(insertGroupSql, new
+    {
+        dto.Name,
+        InviteCode = inviteCode,
+        CreatedAt = createdAt
+    }, transaction);
+
+    string insertMemberSql = @"
+        INSERT INTO GroupMembers (GroupId, UserId, Role)
+        VALUES (@GroupId, @UserId, 'Admin');";
+
+    connection.Execute(insertMemberSql, new
+    {
+        GroupId = groupId,
+        dto.UserId
+    }, transaction);
+
+    transaction.Commit();
+
+    var group = new GroupDto
+    {
+        Id = groupId,
+        Name = dto.Name,
+        InviteCode = inviteCode,
+        CreatedAt = createdAt
+    };
+
+    return Results.Created($"/api/groups/{groupId}", group);
+});
+
+/// <summary>
+/// 指定されたユーザーが所属するグループ一覧を取得します。
+/// </summary>
+app.MapGet("/api/groups", (int? userId) =>
+{
+    int targetUserId = userId ?? 1;
+    using var connection = new SqliteConnection(connectionString);
+    string sql = @"
+        SELECT g.Id, g.Name, g.InviteCode, g.CreatedAt
+        FROM Groups g
+        INNER JOIN GroupMembers gm ON g.Id = gm.GroupId
+        WHERE gm.UserId = @UserId
+        ORDER BY g.Id DESC;";
+
+    var groups = connection.Query<GroupDto>(sql, new { UserId = targetUserId });
+    return Results.Ok(groups);
+});
+
+/// <summary>
+/// 指定された ID のグループ詳細情報を取得します。
+/// </summary>
+app.MapGet("/api/groups/{id:int}", (int id) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+    var group = connection.QuerySingleOrDefault<GroupDto>(
+        "SELECT Id, Name, InviteCode, CreatedAt FROM Groups WHERE Id = @Id",
+        new { Id = id });
+
+    return group is not null ? Results.Ok(group) : Results.NotFound(new { message = "指定されたグループが見つかりません。" });
+});
+
+/// <summary>
+/// 指定されたグループのメンバー一覧を取得します。
+/// </summary>
+app.MapGet("/api/groups/{id:int}/members", (int id) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+    string sql = @"
+        SELECT u.Id AS UserId, u.Name AS UserName, u.Emoji AS UserEmoji, gm.Role
+        FROM GroupMembers gm
+        INNER JOIN Users u ON gm.UserId = u.Id
+        WHERE gm.GroupId = @GroupId
+        ORDER BY gm.Role ASC, u.Id ASC;";
+
+    var members = connection.Query<GroupMemberDto>(sql, new { GroupId = id });
+    return Results.Ok(members);
+});
+
+/// <summary>
+/// 招待コードを使用して既存のグループに参加します。
+/// </summary>
+app.MapPost("/api/groups/join", (JoinGroupDto dto) =>
+{
+    if (string.IsNullOrWhiteSpace(dto.InviteCode))
+    {
+        return Results.BadRequest(new { message = "招待コードは必須項目です。" });
+    }
+
+    using var connection = new SqliteConnection(connectionString);
+    var group = connection.QuerySingleOrDefault<GroupDto>(
+        "SELECT Id, Name, InviteCode, CreatedAt FROM Groups WHERE InviteCode = @InviteCode",
+        new { InviteCode = dto.InviteCode.Trim().ToUpper() });
+
+    if (group is null)
+    {
+        return Results.NotFound(new { message = "指定された招待コードに該当するグループが見つかりません。" });
+    }
+
+    bool isAlreadyMember = connection.ExecuteScalar<bool>(
+        "SELECT COUNT(1) FROM GroupMembers WHERE GroupId = @GroupId AND UserId = @UserId",
+        new { GroupId = group.Id, dto.UserId });
+
+    if (isAlreadyMember)
+    {
+        return Results.BadRequest(new { message = "すでに対象のグループに参加しています。" });
+    }
+
+    connection.Execute(
+        "INSERT INTO GroupMembers (GroupId, UserId, Role) VALUES (@GroupId, @UserId, 'Member')",
+        new { GroupId = group.Id, dto.UserId });
+
+    return Results.Ok(new { message = $"グループ「{group.Name}」に参加しました。", group });
+});
+
+/// <summary>
+/// 指定されたグループのメンバーによる実行記録のみで構成されるタイムラインを取得します。
+/// </summary>
+app.MapGet("/api/groups/{id:int}/timeline", (int id, int? limit) =>
+{
+    int maxCount = limit ?? 20;
+    using var connection = new SqliteConnection(connectionString);
+
+    // 指定されたグループが存在するか検証
+    var groupExists = connection.ExecuteScalar<bool>(
+        "SELECT COUNT(1) FROM Groups WHERE Id = @Id",
+        new { Id = id });
+
+    if (!groupExists)
+    {
+        return Results.NotFound(new { message = "指定されたグループが見つかりません。" });
+    }
+
+    string query = @"
+        SELECT
+            el.Id AS LogId,
+            el.HabitId,
+            h.Title AS HabitTitle,
+            h.Emoji AS HabitEmoji,
+            el.UserId,
+            u.Name AS UserName,
+            u.Emoji AS UserEmoji,
+            el.ExecutedAt,
+            el.Comment
+        FROM ExecutionLogs el
+        INNER JOIN Habits h ON el.HabitId = h.Id
+        INNER JOIN Users u ON el.UserId = u.Id
+        WHERE el.UserId IN (SELECT UserId FROM GroupMembers WHERE GroupId = @GroupId)
+        ORDER BY el.Id DESC
+        LIMIT @Limit;";
+
+    var timelineItems = connection.Query<TimelineItemDto>(query, new { GroupId = id, Limit = maxCount }).ToList();
+
+    foreach (var item in timelineItems)
+    {
+        string likesQuery = @"
+            SELECT ReactionType AS Emoji, COUNT(1) AS Count
+            FROM Likes
+            WHERE ExecutionLogId = @LogId
+            GROUP BY ReactionType;";
+
+        item.Reactions = connection.Query<ReactionSummaryDto>(likesQuery, new { LogId = item.LogId }).ToList();
+    }
+
+    return Results.Ok(timelineItems);
+});
+
+// ------------------------------------------------------------
 // タイムライン＆絵文字リアクション API エンドポイント
 // ------------------------------------------------------------
 
@@ -963,3 +1276,35 @@ public record UpdateUserDto(string Name, string? Emoji);
 /// リアクションを追加するための DTO リクエストモデルです。
 /// </summary>
 public record AddReactionDto(int UserId, string ReactionType);
+
+/// <summary>
+/// グループ新規作成用の DTO リクエストモデルです。
+/// </summary>
+public record CreateGroupDto(int UserId, string Name);
+
+/// <summary>
+/// 招待コードによるグループ参加用の DTO リクエストモデルです。
+/// </summary>
+public record JoinGroupDto(int UserId, string InviteCode);
+
+/// <summary>
+/// グループ情報を表す DTO クラスです。
+/// </summary>
+public class GroupDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string InviteCode { get; set; } = string.Empty;
+    public string CreatedAt { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// グループメンバー情報を表す DTO クラスです。
+/// </summary>
+public class GroupMemberDto
+{
+    public int UserId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string UserEmoji { get; set; } = "👤";
+    public string Role { get; set; } = "Member";
+}
