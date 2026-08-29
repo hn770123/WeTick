@@ -1,8 +1,13 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.Sqlite;
 using Dapper;
 
@@ -11,7 +16,22 @@ using Dapper;
 /// </summary>
 var builder = WebApplication.CreateBuilder(args);
 
+// Cookie認証サービスの設定
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/login"; // 未認証アクセス時の遷移先パス
+        options.ExpireTimeSpan = TimeSpan.FromDays(7); // Cookieの有効期限
+    });
+
+// 認可サービスの設定
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
+
+// 認証・認可ミドルウェアの適用（適用順序が重要）
+app.UseAuthentication();
+app.UseAuthorization();
 
 // SQLite データベースの格納ディレクトリを取得または設定
 string dbDir = Environment.GetEnvironmentVariable("DB_DIR") ?? "./data";
@@ -136,9 +156,96 @@ void InitializeDatabase(string connStr)
 // ------------------------------------------------------------
 
 /// <summary>
+/// ログイン画面 UI エンドポイント（GET）
+/// </summary>
+app.MapGet("/login", (HttpContext context) =>
+{
+    string? errorMessage = context.Request.Query["error"].ToString();
+    string errorHtml = !string.IsNullOrEmpty(errorMessage)
+        ? $"<p style=\"color: #e53e3e; margin-bottom: 15px;\"><small>{errorMessage}</small></p>"
+        : "";
+
+    return Results.Content($$"""
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>ログイン - HabitTracker</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f7f9fa; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+                .card { background: white; border-radius: 8px; padding: 30px; width: 100%; max-width: 360px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                h2 { margin-top: 0; color: #1a202c; text-align: center; }
+                .form-group { margin-bottom: 15px; }
+                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #4a5568; }
+                .form-group input { width: 100%; padding: 10px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box; }
+                .btn { background-color: #3182ce; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; font-size: 1rem; }
+                .btn:hover { background-color: #2b6cb0; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>🔑 ログイン</h2>
+                {{errorHtml}}
+                <form action="/login" method="post">
+                    <div class="form-group">
+                        <label for="username">ユーザー名</label>
+                        <input type="text" id="username" name="Username" required autofocus placeholder="admin">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">パスワード</label>
+                        <input type="password" id="password" name="Password" required placeholder="secret-password">
+                    </div>
+                    <button type="submit" class="btn">ログイン</button>
+                </form>
+            </div>
+        </body>
+        </html>
+        """, "text/html; charset=utf-8");
+}).AllowAnonymous();
+
+/// <summary>
+/// ログイン処理 エンドポイント（POST）
+/// </summary>
+app.MapPost("/login", async (HttpContext context) =>
+{
+    var form = await context.Request.ReadFormAsync();
+    string username = form["Username"].ToString();
+    string password = form["Password"].ToString();
+
+    // ユーザー名とパスワードの簡易検証（Auth.md 準拠）
+    if (username == "admin" && password == "secret-password")
+    {
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.Name, username)
+        };
+
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+
+        return Results.Redirect("/");
+    }
+
+    return Results.Redirect("/login?error=" + Uri.EscapeDataString("ユーザー名またはパスワードが違います。"));
+}).AllowAnonymous();
+
+/// <summary>
+/// ログアウト処理 エンドポイント（GET）
+/// </summary>
+app.MapGet("/logout", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Redirect("/login");
+});
+
+/// <summary>
 /// ダッシュボード / マイ習慣＆ワンタップ実行画面 UI エンドポイント
 /// </summary>
-app.MapGet("/", () => Results.Content("""
+app.MapGet("/", (HttpContext context) =>
+{
+    string currentUser = context.User.Identity?.Name ?? "不明";
+    return Results.Content($$"""
     <!DOCTYPE html>
     <html lang="ja">
     <head>
@@ -152,8 +259,10 @@ app.MapGet("/", () => Results.Content("""
             .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
             .habit-item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #edf2f7; padding: 12px 0; }
             .habit-item:last-child { border-bottom: none; }
-            .btn { background-color: #3182ce; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+            .btn { background-color: #3182ce; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block; }
             .btn:hover { background-color: #2b6cb0; }
+            .btn-danger { background-color: #e53e3e; }
+            .btn-danger:hover { background-color: #c53030; }
             .btn-success { background-color: #38a169; }
             .btn-success:hover { background-color: #2f855a; }
             .form-group { margin-bottom: 15px; }
@@ -169,11 +278,18 @@ app.MapGet("/", () => Results.Content("""
             .reaction-badge { background: #edf2f7; padding: 4px 8px; border-radius: 12px; font-size: 0.9em; display: inline-flex; align-items: center; gap: 4px; }
             .btn-reaction { background: #f7fafc; border: 1px solid #cbd5e0; padding: 4px 8px; border-radius: 12px; cursor: pointer; font-size: 0.9em; }
             .btn-reaction:hover { background: #e2e8f0; }
+            .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
             .user-profile-bar { display: flex; align-items: center; gap: 10px; background: #ebf8ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; }
         </style>
     </head>
     <body>
-        <h1>習慣トラッカー - ダッシュボード & タイムライン</h1>
+        <div class="header-bar">
+            <h1>習慣トラッカー - ダッシュボード & タイムライン</h1>
+            <div>
+                <span style="margin-right: 10px; font-weight: bold;">ログイン中: {{currentUser}}</span>
+                <a href="/logout" class="btn btn-danger">ログアウト</a>
+            </div>
+        </div>
 
         <!-- ユーザープロフィール設定 -->
         <div class="user-profile-bar card">
@@ -383,7 +499,8 @@ app.MapGet("/", () => Results.Content("""
         </script>
     </body>
     </html>
-    """, "text/html; charset=utf-8"));
+    """, "text/html; charset=utf-8");
+}).RequireAuthorization();
 
 /// <summary>
 /// データベース状態確認用エンドポイント
