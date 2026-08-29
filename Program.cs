@@ -143,6 +143,19 @@ void InitializeDatabase(string connStr)
         );
     ");
 
+    // Comments (タイムライン投稿コメントテーブル)
+    connection.Execute(@"
+        CREATE TABLE IF NOT EXISTS Comments (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ExecutionLogId INTEGER NOT NULL,
+            UserId INTEGER NOT NULL,
+            CommentText TEXT NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            FOREIGN KEY (ExecutionLogId) REFERENCES ExecutionLogs(Id),
+            FOREIGN KEY (UserId) REFERENCES Users(Id)
+        );
+    ");
+
     // デフォルトのテスト用初期ユーザーが存在しない場合は追加
     connection.Execute(@"
         INSERT INTO Users (Id, Name, Email, Emoji, CreatedAt)
@@ -275,9 +288,14 @@ app.MapGet("/", (HttpContext context) =>
             .habit-title { display: flex; align-items: center; gap: 6px; font-size: 1.1em; font-weight: bold; color: #2d3748; margin-bottom: 6px; }
             .task-emoji { font-size: 1.3em; }
             .reaction-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-            .reaction-badge { background: #edf2f7; padding: 4px 8px; border-radius: 12px; font-size: 0.9em; display: inline-flex; align-items: center; gap: 4px; }
+            .reaction-badge { background: #edf2f7; padding: 4px 8px; border-radius: 12px; font-size: 0.9em; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+            .reaction-badge:hover { background: #e2e8f0; }
             .btn-reaction { background: #f7fafc; border: 1px solid #cbd5e0; padding: 4px 8px; border-radius: 12px; cursor: pointer; font-size: 0.9em; }
             .btn-reaction:hover { background: #e2e8f0; }
+            .comments-section { margin-top: 12px; border-top: 1px dashed #e2e8f0; padding-top: 10px; font-size: 0.9em; }
+            .comment-item { display: flex; justify-content: space-between; align-items: center; background: #f7fafc; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
+            .comment-form { display: flex; gap: 6px; margin-top: 8px; }
+            .comment-input { flex: 1; padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9em; }
             .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
             .user-profile-bar { display: flex; align-items: center; gap: 10px; background: #ebf8ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; }
         </style>
@@ -582,18 +600,39 @@ app.MapGet("/", (HttpContext context) =>
 
                         <div class="reaction-bar">
                             ${(item.reactions || []).map(r => `
-                                <span class="reaction-badge">${escapeHtml(r.emoji)} ${r.count}</span>
+                                <span class="reaction-badge" title="タップしてリアクションを切り替え" onclick="toggleReaction(${item.logId}, '${escapeHtml(r.emoji)}')">${escapeHtml(r.emoji)} ${r.count}</span>
                             `).join('')}
                             <span style="color: #cbd5e0;">|</span>
                             ${quickEmojis.map(emoji => `
-                                <button class="btn-reaction" onclick="addReaction(${item.logId}, '${emoji}')">${emoji}</button>
+                                <button class="btn-reaction" onclick="toggleReaction(${item.logId}, '${emoji}')">${emoji}</button>
                             `).join('')}
+                        </div>
+
+                        <!-- コメントセクション -->
+                        <div class="comments-section">
+                            <div id="comments-list-${item.logId}">
+                                ${(item.comments || []).map(c => `
+                                    <div class="comment-item">
+                                        <div>
+                                            <span>${escapeHtml(c.userEmoji)} <strong>${escapeHtml(c.userName)}</strong>: ${escapeHtml(c.commentText)}</span>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <small style="color: #a0aec0;">${new Date(c.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</small>
+                                            ${c.userId === USER_ID ? `<button style="background: none; border: none; color: #e53e3e; cursor: pointer; font-size: 0.8em;" onclick="deleteComment(${c.id})">❌</button>` : ''}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <form class="comment-form" onsubmit="postComment(event, ${item.logId})">
+                                <input type="text" id="comment-input-${item.logId}" class="comment-input" placeholder="応援コメントを入力..." required>
+                                <button type="submit" class="btn" style="padding: 6px 12px; font-size: 0.85em;">送信</button>
+                            </form>
                         </div>
                     </div>
                 `).join('');
             }
 
-            async function addReaction(logId, emoji) {
+            async function toggleReaction(logId, emoji) {
                 const res = await fetch(`/api/logs/${logId}/reactions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -604,6 +643,40 @@ app.MapGet("/", (HttpContext context) =>
                     loadTimeline();
                 } else {
                     alert('リアクションの送信に失敗しました。');
+                }
+            }
+
+            async function postComment(e, logId) {
+                e.preventDefault();
+                const inputEl = document.getElementById(`comment-input-${logId}`);
+                const text = inputEl ? inputEl.value : '';
+
+                if (!text.trim()) return;
+
+                const res = await fetch(`/api/logs/${logId}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: USER_ID, commentText: text })
+                });
+
+                if (res.ok) {
+                    loadTimeline();
+                } else {
+                    alert('コメントの送信に失敗しました。');
+                }
+            }
+
+            async function deleteComment(commentId) {
+                if (!confirm('このコメントを削除しますか？')) return;
+
+                const res = await fetch(`/api/comments/${commentId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    loadTimeline();
+                } else {
+                    alert('コメントの削除に失敗しました。');
                 }
             }
 
@@ -1071,6 +1144,15 @@ app.MapGet("/api/groups/{id:int}/timeline", (int id, int? limit) =>
             GROUP BY ReactionType;";
 
         item.Reactions = connection.Query<ReactionSummaryDto>(likesQuery, new { LogId = item.LogId }).ToList();
+
+        string commentsQuery = @"
+            SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt
+            FROM Comments c
+            INNER JOIN Users u ON c.UserId = u.Id
+            WHERE c.ExecutionLogId = @LogId
+            ORDER BY c.Id ASC;";
+
+        item.Comments = connection.Query<CommentDto>(commentsQuery, new { LogId = item.LogId }).ToList();
     }
 
     return Results.Ok(timelineItems);
@@ -1081,7 +1163,7 @@ app.MapGet("/api/groups/{id:int}/timeline", (int id, int? limit) =>
 // ------------------------------------------------------------
 
 /// <summary>
-/// タイムライン用データ（実行記録 + ユーザー絵文字 + タスク絵文字 + 絵文字リアクション一覧）を取得します。
+/// タイムライン用データ（実行記録 + ユーザー絵文字 + タスク絵文字 + 絵文字リアクション一覧 + コメント一覧）を取得します。
 /// </summary>
 app.MapGet("/api/timeline", (int? limit) =>
 {
@@ -1108,7 +1190,7 @@ app.MapGet("/api/timeline", (int? limit) =>
 
     var timelineItems = connection.Query<TimelineItemDto>(query, new { Limit = maxCount }).ToList();
 
-    // 各実行記録に対するリアクション（絵文字ごとの件数）を取得
+    // 各実行記録に対するリアクションおよびコメントを取得
     foreach (var item in timelineItems)
     {
         string likesQuery = @"
@@ -1118,13 +1200,51 @@ app.MapGet("/api/timeline", (int? limit) =>
             GROUP BY ReactionType;";
 
         item.Reactions = connection.Query<ReactionSummaryDto>(likesQuery, new { LogId = item.LogId }).ToList();
+
+        string commentsQuery = @"
+            SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt
+            FROM Comments c
+            INNER JOIN Users u ON c.UserId = u.Id
+            WHERE c.ExecutionLogId = @LogId
+            ORDER BY c.Id ASC;";
+
+        item.Comments = connection.Query<CommentDto>(commentsQuery, new { LogId = item.LogId }).ToList();
     }
 
     return Results.Ok(timelineItems);
 });
 
 /// <summary>
-/// 指定された実行記録に対して絵文字リアクションを追加します。
+/// 指定された実行記録に対するリアクション一覧を取得します。
+/// </summary>
+app.MapGet("/api/logs/{logId:int}/reactions", (int logId) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+
+    // ログが存在するか確認
+    var logExists = connection.ExecuteScalar<bool>(
+        "SELECT COUNT(1) FROM ExecutionLogs WHERE Id = @Id",
+        new { Id = logId });
+
+    if (!logExists)
+    {
+        return Results.NotFound(new { message = "指定された実行記録が見つかりません。" });
+    }
+
+    string sql = @"
+        SELECT l.Id, l.ExecutionLogId, l.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, l.ReactionType, l.CreatedAt
+        FROM Likes l
+        INNER JOIN Users u ON l.UserId = u.Id
+        WHERE l.ExecutionLogId = @ExecutionLogId
+        ORDER BY l.Id ASC;";
+
+    var reactions = connection.Query<ReactionDetailDto>(sql, new { ExecutionLogId = logId });
+    return Results.Ok(reactions);
+});
+
+/// <summary>
+/// 指定された実行記録に対して絵文字リアクションを追加または解除（トグル）します。
+/// 既に同一のリアクションが存在する場合は削除（トグルOFF）します。
 /// </summary>
 app.MapPost("/api/logs/{logId:int}/reactions", (int logId, AddReactionDto dto) =>
 {
@@ -1145,6 +1265,26 @@ app.MapPost("/api/logs/{logId:int}/reactions", (int logId, AddReactionDto dto) =
         return Results.NotFound(new { message = "指定された実行記録が見つかりません。" });
     }
 
+    // 既存の同一リアクションを検索（トグル判定用）
+    int existingId = connection.ExecuteScalar<int>(
+        "SELECT Id FROM Likes WHERE ExecutionLogId = @ExecutionLogId AND UserId = @UserId AND ReactionType = @ReactionType",
+        new { ExecutionLogId = logId, dto.UserId, dto.ReactionType });
+
+    if (existingId > 0)
+    {
+        // すでにリアクションが存在する場合は解除（削除）
+        connection.Execute("DELETE FROM Likes WHERE Id = @Id", new { Id = existingId });
+        return Results.Ok(new
+        {
+            action = "removed",
+            executionLogId = logId,
+            userId = dto.UserId,
+            reactionType = dto.ReactionType,
+            message = "リアクションを解除しました。"
+        });
+    }
+
+    // リアクションが存在しない場合は新規追加
     string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
     string sql = @"
         INSERT INTO Likes (ExecutionLogId, UserId, ReactionType, CreatedAt)
@@ -1161,12 +1301,132 @@ app.MapPost("/api/logs/{logId:int}/reactions", (int logId, AddReactionDto dto) =
 
     return Results.Created($"/api/logs/{logId}/reactions/{reactionId}", new
     {
+        action = "added",
         id = reactionId,
         executionLogId = logId,
         userId = dto.UserId,
         reactionType = dto.ReactionType,
-        createdAt
+        createdAt,
+        message = "リアクションを追加しました。"
     });
+});
+
+/// <summary>
+/// 特定のリアクション ID を指定して削除します。
+/// </summary>
+app.MapDelete("/api/logs/{logId:int}/reactions/{reactionId:int}", (int logId, int reactionId) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+    int rowsAffected = connection.Execute(
+        "DELETE FROM Likes WHERE Id = @ReactionId AND ExecutionLogId = @LogId",
+        new { ReactionId = reactionId, LogId = logId });
+
+    if (rowsAffected == 0)
+    {
+        return Results.NotFound(new { message = "削除対象のリアクションが見つかりません。" });
+    }
+
+    return Results.Ok(new { message = "リアクションを削除しました。", reactionId });
+});
+
+// ------------------------------------------------------------
+// タイムラインコメント API エンドポイント
+// ------------------------------------------------------------
+
+/// <summary>
+/// 指定された実行記録に対するコメント一覧を取得します。
+/// </summary>
+app.MapGet("/api/logs/{logId:int}/comments", (int logId) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+
+    var logExists = connection.ExecuteScalar<bool>(
+        "SELECT COUNT(1) FROM ExecutionLogs WHERE Id = @Id",
+        new { Id = logId });
+
+    if (!logExists)
+    {
+        return Results.NotFound(new { message = "指定された実行記録が見つかりません。" });
+    }
+
+    string sql = @"
+        SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt
+        FROM Comments c
+        INNER JOIN Users u ON c.UserId = u.Id
+        WHERE c.ExecutionLogId = @ExecutionLogId
+        ORDER BY c.Id ASC;";
+
+    var comments = connection.Query<CommentDto>(sql, new { ExecutionLogId = logId });
+    return Results.Ok(comments);
+});
+
+/// <summary>
+/// 指定された実行記録に対して新しいコメントを投稿します。
+/// </summary>
+app.MapPost("/api/logs/{logId:int}/comments", (int logId, AddCommentDto dto) =>
+{
+    if (string.IsNullOrWhiteSpace(dto.CommentText))
+    {
+        return Results.BadRequest(new { message = "コメント内容を入力してください。" });
+    }
+
+    using var connection = new SqliteConnection(connectionString);
+
+    var logExists = connection.ExecuteScalar<bool>(
+        "SELECT COUNT(1) FROM ExecutionLogs WHERE Id = @Id",
+        new { Id = logId });
+
+    if (!logExists)
+    {
+        return Results.NotFound(new { message = "指定された実行記録が見つかりません。" });
+    }
+
+    string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+    string sql = @"
+        INSERT INTO Comments (ExecutionLogId, UserId, CommentText, CreatedAt)
+        VALUES (@ExecutionLogId, @UserId, @CommentText, @CreatedAt);
+        SELECT last_insert_rowid();";
+
+    int commentId = connection.ExecuteScalar<int>(sql, new
+    {
+        ExecutionLogId = logId,
+        UserId = dto.UserId,
+        CommentText = dto.CommentText.Trim(),
+        CreatedAt = createdAt
+    });
+
+    var user = connection.QuerySingleOrDefault<User>(
+        "SELECT Name, Emoji FROM Users WHERE Id = @Id",
+        new { Id = dto.UserId });
+
+    var createdComment = new CommentDto
+    {
+        Id = commentId,
+        ExecutionLogId = logId,
+        UserId = dto.UserId,
+        UserName = user?.Name ?? "不明",
+        UserEmoji = user?.Emoji ?? "👤",
+        CommentText = dto.CommentText.Trim(),
+        CreatedAt = createdAt
+    };
+
+    return Results.Created($"/api/logs/{logId}/comments/{commentId}", createdComment);
+});
+
+/// <summary>
+/// 指定された ID のコメントを削除します。
+/// </summary>
+app.MapDelete("/api/comments/{commentId:int}", (int commentId) =>
+{
+    using var connection = new SqliteConnection(connectionString);
+    int rowsAffected = connection.Execute("DELETE FROM Comments WHERE Id = @Id", new { Id = commentId });
+
+    if (rowsAffected == 0)
+    {
+        return Results.NotFound(new { message = "削除対象のコメントが見つかりません。" });
+    }
+
+    return Results.Ok(new { message = "コメントを削除しました。", commentId });
 });
 
 var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
@@ -1241,7 +1501,27 @@ public class TimelineItemDto
     public string ExecutedAt { get; set; } = string.Empty;
     public string? Comment { get; set; }
     public List<ReactionSummaryDto> Reactions { get; set; } = new();
+    public List<CommentDto> Comments { get; set; } = new();
 }
+
+/// <summary>
+/// タイムライン投稿のコメント情報を表す DTO クラスです。
+/// </summary>
+public class CommentDto
+{
+    public int Id { get; set; }
+    public int ExecutionLogId { get; set; }
+    public int UserId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string UserEmoji { get; set; } = "👤";
+    public string CommentText { get; set; } = string.Empty;
+    public string CreatedAt { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// コメントを追加するための DTO リクエストモデルです。
+/// </summary>
+public record AddCommentDto(int UserId, string CommentText);
 
 /// <summary>
 /// リアクションの集計情報を表す DTO クラスです。
@@ -1250,6 +1530,20 @@ public class ReactionSummaryDto
 {
     public string Emoji { get; set; } = string.Empty;
     public int Count { get; set; }
+}
+
+/// <summary>
+/// リアクションの詳細情報を表す DTO クラスです。
+/// </summary>
+public class ReactionDetailDto
+{
+    public int Id { get; set; }
+    public int ExecutionLogId { get; set; }
+    public int UserId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string UserEmoji { get; set; } = "👤";
+    public string ReactionType { get; set; } = "👍";
+    public string CreatedAt { get; set; } = string.Empty;
 }
 
 /// <summary>
