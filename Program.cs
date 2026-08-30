@@ -467,6 +467,12 @@ app.MapGet("/", (HttpContext context) =>
                 </form>
             </div>
 
+            <!-- 登録済み習慣の管理・編集・削除セクション -->
+            <div class="card">
+                <h2>🛠️ 習慣（タスク）の管理</h2>
+                <div id="manage-habits-list">読み込み中...</div>
+            </div>
+
             <!-- グループ管理セクション -->
             <div class="card">
                 <h2>👥 所属グループ管理</h2>
@@ -501,10 +507,14 @@ app.MapGet("/", (HttpContext context) =>
                 <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
             </div>
 
-            <!-- パスワード変更カード -->
+            <!-- ユーザー名・パスワード変更カード -->
             <div class="card">
-                <h2>🔒 パスワード変更</h2>
+                <h2>🔒 ユーザー名・パスワード変更</h2>
                 <form id="change-password-form" onsubmit="changePassword(event)">
+                    <div class="form-group">
+                        <label for="new-username">新しいユーザー名（変更する場合のみ入力）</label>
+                        <input type="text" id="new-username" placeholder="変更後のユーザー名">
+                    </div>
                     <div style="display: flex; gap: 15px; flex-wrap: wrap;">
                         <div class="form-group" style="flex: 1; min-width: 200px;">
                             <label for="current-password">現在のパスワード</label>
@@ -515,7 +525,7 @@ app.MapGet("/", (HttpContext context) =>
                             <input type="password" id="new-password" required placeholder="新しいパスワード">
                         </div>
                     </div>
-                    <button type="submit" class="btn">パスワードを変更</button>
+                    <button type="submit" class="btn">アカウント情報を変更</button>
                 </form>
             </div>
         </section>
@@ -578,6 +588,7 @@ app.MapGet("/", (HttpContext context) =>
                     case 'task-complete':
                         pageTitle.innerText = '習慣トラッカー - タスクの完備';
                         loadGroups();
+                        loadManageHabits();
                         break;
                     case 'password-change':
                         pageTitle.innerText = '習慣トラッカー - パスワード変更';
@@ -621,19 +632,25 @@ app.MapGet("/", (HttpContext context) =>
                 e.preventDefault();
                 const currentPassword = document.getElementById('current-password').value;
                 const newPassword = document.getElementById('new-password').value;
+                const newUsername = document.getElementById('new-username').value.trim();
 
                 const res = await fetch('/api/users/change-password', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ currentPassword, newPassword })
+                    body: JSON.stringify({ currentPassword, newPassword, newUsername: newUsername || null })
                 });
 
                 if (res.ok) {
+                    const data = await res.json();
                     document.getElementById('change-password-form').reset();
-                    alert('🔒 パスワードを変更しました！');
+                    if (data.newUsername) {
+                        currentUserName = data.newUsername;
+                        document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
+                    }
+                    alert('🔒 アカウント情報（パスワード / ユーザー名）を変更しました！');
                 } else {
                     const err = await res.json();
-                    alert(err.message || 'パスワードの変更に失敗しました。');
+                    alert(err.message || 'アカウント情報の変更に失敗しました。');
                 }
             }
 
@@ -648,14 +665,15 @@ app.MapGet("/", (HttpContext context) =>
                 }
 
                 container.innerHTML = habits.map(h => `
-                    <div class="habit-item">
-                        <div>
+                    <div class="habit-item" style="flex-wrap: wrap; gap: 10px;">
+                        <div style="flex: 1; min-width: 200px;">
                             <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
                             <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
                             ${h.description ? `<p style="margin: 4px 0 0; color: #718096; font-size: 0.9em;">${escapeHtml(h.description)}</p>` : ''}
                         </div>
-                        <div>
-                            <button class="btn btn-success" onclick="executeHabit(${h.id})">✅ 実行 (ワンタップ)</button>
+                        <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 280px; justify-content: flex-end;">
+                            <input type="text" id="habit-comment-${h.id}" placeholder="記録コメント（任意）" style="padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9em; flex: 1;">
+                            <button class="btn btn-success" onclick="executeHabit(${h.id})">✅ 実行</button>
                         </div>
                     </div>
                 `).join('');
@@ -678,20 +696,138 @@ app.MapGet("/", (HttpContext context) =>
                     document.getElementById('create-habit-form').reset();
                     document.getElementById('emoji').value = '📝';
                     loadHabits();
+                    loadManageHabits();
                     alert('新しい習慣を追加しました！');
                 } else {
                     alert('習慣の追加に失敗しました。');
                 }
             }
 
-            async function executeHabit(habitId) {
-                const res = await fetch(`/api/habits/${habitId}/execute`, {
-                    method: 'POST',
+            /**
+             * 登録済みの習慣一覧を取得し、管理（編集・削除）UIをレンダリングします。
+             */
+            async function loadManageHabits() {
+                const res = await fetch(`/api/habits?userId=${currentUserId}`);
+                const habits = await res.json();
+                const container = document.getElementById('manage-habits-list');
+
+                if (!container) return;
+
+                if (!habits || habits.length === 0) {
+                    container.innerHTML = '<p style="color: #718096;">登録されている習慣がありません。</p>';
+                    return;
+                }
+
+                container.innerHTML = habits.map(h => `
+                    <div class="habit-item" style="flex-wrap: wrap; gap: 10px;" id="manage-habit-item-${h.id}">
+                        <div style="flex: 1; min-width: 200px;">
+                            <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
+                            <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
+                            ${h.description ? `<p style="margin: 4px 0 0; color: #718096; font-size: 0.9em;">${escapeHtml(h.description)}</p>` : ''}
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="toggleEditHabitForm(${h.id})">✏️ 編集</button>
+                            <button class="btn btn-danger" style="padding: 6px 12px; font-size: 0.85em;" onclick="deleteHabit(${h.id})">🗑️ 削除</button>
+                        </div>
+                        <div id="edit-habit-form-${h.id}" style="display: none; width: 100%; margin-top: 10px; background: #f7fafc; padding: 12px; border-radius: 6px;">
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <label style="font-size: 0.85em;">タイトル</label>
+                                <input type="text" id="edit-title-${h.id}" value="${escapeHtml(h.title)}" style="padding: 6px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <label style="font-size: 0.85em;">絵文字</label>
+                                <input type="text" id="edit-emoji-${h.id}" value="${escapeHtml(h.emoji || '📝')}" style="padding: 6px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <label style="font-size: 0.85em;">詳細メモ</label>
+                                <input type="text" id="edit-description-${h.id}" value="${escapeHtml(h.description || '')}" style="padding: 6px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <label style="font-size: 0.85em;">頻度</label>
+                                <select id="edit-frequency-${h.id}" style="padding: 6px;">
+                                    <option value="Daily" ${h.frequency === 'Daily' ? 'selected' : ''}>毎日</option>
+                                    <option value="Weekly" ${h.frequency === 'Weekly' ? 'selected' : ''}>毎週</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                                <button class="btn btn-success" style="padding: 6px 12px; font-size: 0.85em;" onclick="updateHabit(${h.id})">保存</button>
+                                <button class="btn" style="padding: 6px 12px; font-size: 0.85em; background: #cbd5e0;" onclick="toggleEditHabitForm(${h.id})">キャンセル</button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            /**
+             * 習慣インライン編集フォームの開閉をトグルします。
+             */
+            function toggleEditHabitForm(habitId) {
+                const el = document.getElementById(`edit-habit-form-${habitId}`);
+                if (el) {
+                    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+                }
+            }
+
+            /**
+             * 習慣情報を更新（PUT）します。
+             */
+            async function updateHabit(habitId) {
+                const title = document.getElementById(`edit-title-${habitId}`).value;
+                const emoji = document.getElementById(`edit-emoji-${habitId}`).value || '📝';
+                const description = document.getElementById(`edit-description-${habitId}`).value;
+                const frequency = document.getElementById(`edit-frequency-${habitId}`).value;
+
+                if (!title.trim()) {
+                    alert('タイトルを入力してください。');
+                    return;
+                }
+
+                const res = await fetch(`/api/habits/${habitId}`, {
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUserId, comment: 'ワンタップ実行！' })
+                    body: JSON.stringify({ title, description, emoji, frequency })
                 });
 
                 if (res.ok) {
+                    alert('習慣を更新しました！');
+                    loadManageHabits();
+                    loadHabits();
+                } else {
+                    alert('習慣の更新に失敗しました。');
+                }
+            }
+
+            /**
+             * 習慣を削除（DELETE）します。
+             */
+            async function deleteHabit(habitId) {
+                if (!confirm('この習慣を削除しますか？')) return;
+
+                const res = await fetch(`/api/habits/${habitId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    alert('習慣を削除しました。');
+                    loadManageHabits();
+                    loadHabits();
+                } else {
+                    alert('習慣の削除に失敗しました。');
+                }
+            }
+
+            async function executeHabit(habitId) {
+                const commentInput = document.getElementById(`habit-comment-${habitId}`);
+                const commentText = commentInput ? commentInput.value.trim() : '';
+
+                const res = await fetch(`/api/habits/${habitId}/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUserId, comment: commentText || 'ワンタップ実行！' })
+                });
+
+                if (res.ok) {
+                    if (commentInput) commentInput.value = '';
                     loadTimeline();
                     alert('🎉 習慣の実行を記録しました！');
                 } else {
@@ -987,16 +1123,19 @@ app.MapPut("/api/users/{id:int}", (int id, UpdateUserDto dto) =>
 });
 
 /// <summary>
-/// ログイン中のユーザーのパスワードを変更します。
+/// ログイン中のユーザーのパスワードおよびユーザー名を変更します。
+/// ユーザー名が変更された場合は重複チェックを行い、DBおよび認証Cookie（Claims）を更新します。
 /// </summary>
-app.MapPost("/api/users/change-password", (HttpContext context, ChangePasswordDto dto) =>
+app.MapPost("/api/users/change-password", async (HttpContext context, ChangePasswordDto dto) =>
 {
-    string? username = context.User.Identity?.Name;
-    if (string.IsNullOrEmpty(username))
+    // 現在認証されているユーザー名を取得
+    string? currentUsername = context.User.Identity?.Name;
+    if (string.IsNullOrEmpty(currentUsername))
     {
         return Results.Unauthorized();
     }
 
+    // パスワード入力チェック
     if (string.IsNullOrWhiteSpace(dto.CurrentPassword) || string.IsNullOrWhiteSpace(dto.NewPassword))
     {
         return Results.BadRequest(new { message = "現在のパスワードと新しいパスワードを両方入力してください。" });
@@ -1005,23 +1144,54 @@ app.MapPost("/api/users/change-password", (HttpContext context, ChangePasswordDt
     using var connection = new SqliteConnection(connectionString);
     var user = connection.QuerySingleOrDefault<User>(
         "SELECT Id, Name, Password FROM Users WHERE Name = @Name",
-        new { Name = username });
+        new { Name = currentUsername });
 
     if (user is null)
     {
         return Results.NotFound(new { message = "ユーザーが見つかりません。" });
     }
 
+    // 現在のパスワードの正当性を検証
     if (user.Password != dto.CurrentPassword)
     {
         return Results.BadRequest(new { message = "現在のパスワードが正しくありません。" });
     }
 
-    connection.Execute(
-        "UPDATE Users SET Password = @NewPassword WHERE Id = @Id",
-        new { NewPassword = dto.NewPassword.Trim(), Id = user.Id });
+    // 新しいユーザー名が指定されている場合の重複確認および決定
+    string updatedUsername = currentUsername;
+    if (!string.IsNullOrWhiteSpace(dto.NewUsername) && dto.NewUsername.Trim() != currentUsername)
+    {
+        string candidateName = dto.NewUsername.Trim();
+        bool isDuplicate = connection.ExecuteScalar<bool>(
+            "SELECT COUNT(1) FROM Users WHERE Name = @Name AND Id <> @Id",
+            new { Name = candidateName, Id = user.Id });
 
-    return Results.Ok(new { message = "パスワードが正常に変更されました。" });
+        if (isDuplicate)
+        {
+            return Results.BadRequest(new { message = "指定されたユーザー名は既に使用されています。" });
+        }
+        updatedUsername = candidateName;
+    }
+
+    // データベースのパスワードおよびユーザー名を更新
+    connection.Execute(
+        "UPDATE Users SET Password = @NewPassword, Name = @NewUsername WHERE Id = @Id",
+        new { NewPassword = dto.NewPassword.Trim(), NewUsername = updatedUsername, Id = user.Id });
+
+    // ユーザー名が変更された場合は、Cookie認証のClaimを更新（再サインイン）
+    if (updatedUsername != currentUsername)
+    {
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.Name, updatedUsername),
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())
+        };
+
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+    }
+
+    return Results.Ok(new { message = "ユーザー情報（パスワード / ユーザー名）が正常に変更されました。", newUsername = updatedUsername });
 }).RequireAuthorization();
 
 // ------------------------------------------------------------
@@ -1132,18 +1302,53 @@ app.MapPut("/api/habits/{id:int}", (int id, UpdateHabitDto dto) =>
 });
 
 /// <summary>
-/// 習慣を削除します。
+/// 習慣を削除します。関連する実行記録（ExecutionLogs）、いいね（Likes）、コメント（Comments）も併せて削除します。
 /// </summary>
 app.MapDelete("/api/habits/{id:int}", (int id) =>
 {
     using var connection = new SqliteConnection(connectionString);
-    int rowsAffected = connection.Execute("DELETE FROM Habits WHERE Id = @Id", new { Id = id });
+    connection.Open();
+    using var transaction = connection.BeginTransaction();
+
+    // 削除対象習慣に関連する ExecutionLogs の Id を取得
+    var logIds = connection.Query<int>(
+        "SELECT Id FROM ExecutionLogs WHERE HabitId = @HabitId",
+        new { HabitId = id },
+        transaction).ToList();
+
+    if (logIds.Count > 0)
+    {
+        // 関連する Likes と Comments を削除
+        connection.Execute(
+            "DELETE FROM Likes WHERE ExecutionLogId IN @LogIds",
+            new { LogIds = logIds },
+            transaction);
+
+        connection.Execute(
+            "DELETE FROM Comments WHERE ExecutionLogId IN @LogIds",
+            new { LogIds = logIds },
+            transaction);
+
+        // 関連する ExecutionLogs を削除
+        connection.Execute(
+            "DELETE FROM ExecutionLogs WHERE HabitId = @HabitId",
+            new { HabitId = id },
+            transaction);
+    }
+
+    // 習慣自体を削除
+    int rowsAffected = connection.Execute(
+        "DELETE FROM Habits WHERE Id = @Id",
+        new { Id = id },
+        transaction);
 
     if (rowsAffected == 0)
     {
+        transaction.Rollback();
         return Results.NotFound(new { message = "削除対象の習慣が見つかりません。" });
     }
 
+    transaction.Commit();
     return Results.Ok(new { message = "習慣が正常に削除されました。", id });
 });
 
@@ -1841,9 +2046,9 @@ public record ExecuteHabitDto(int UserId, string? Comment);
 public record UpdateUserDto(string Name, string? Emoji);
 
 /// <summary>
-/// パスワード変更用の DTO リクエストモデルです。
+/// ユーザー名およびパスワード変更用の DTO リクエストモデルです。
 /// </summary>
-public record ChangePasswordDto(string CurrentPassword, string NewPassword);
+public record ChangePasswordDto(string CurrentPassword, string NewPassword, string? NewUsername);
 
 /// <summary>
 /// リアクションを追加するための DTO リクエストモデルです。
