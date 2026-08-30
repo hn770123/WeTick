@@ -311,7 +311,9 @@ app.MapGet("/logout", async (HttpContext context) =>
 });
 
 /// <summary>
-/// ダッシュボード / マイ習慣＆ワンタップ実行画面 UI エンドポイント
+/// ダッシュボード / メイン画面 UI エンドポイント
+/// ハンバーガーメニューにより「タイムライン」「タスクのチェック」「タスクの完備」「パスワード変更」の4画面を独立表示します。
+/// デフォルトの表示画面は「タイムライン」です。
 /// </summary>
 app.MapGet("/", (HttpContext context) =>
 {
@@ -322,9 +324,10 @@ app.MapGet("/", (HttpContext context) =>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>HabitTracker - マイ習慣 & タイムライン</title>
+        <title>HabitTracker - 習慣トラッカー</title>
         <script src="https://unpkg.com/htmx.org@1.9.10"></script>
         <style>
+            * { box-sizing: border-box; }
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f7f9fa; color: #333; }
             h1, h2 { color: #1a202c; }
             .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
@@ -354,119 +357,235 @@ app.MapGet("/", (HttpContext context) =>
             .comment-item { display: flex; justify-content: space-between; align-items: center; background: #f7fafc; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
             .comment-form { display: flex; gap: 6px; margin-top: 8px; }
             .comment-input { flex: 1; padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9em; }
-            .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+
+            /* ヘッダー＆ハンバーガーメニュー用のスタイル設定 */
+            .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; background: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+            .hamburger-btn { background: none; border: none; font-size: 1.8rem; cursor: pointer; padding: 0 8px; line-height: 1; color: #2d3748; }
+            .hamburger-btn:hover { color: #3182ce; }
+            .nav-drawer { position: fixed; top: 0; left: -280px; width: 280px; height: 100vh; background: #1a202c; color: white; transition: left 0.3s ease; z-index: 1000; padding: 20px 0; box-shadow: 2px 0 10px rgba(0,0,0,0.2); }
+            .nav-drawer.open { left: 0; }
+            .nav-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.4); display: none; z-index: 999; }
+            .nav-overlay.open { display: block; }
+            .drawer-header { display: flex; justify-content: space-between; align-items: center; padding: 0 20px 20px 20px; border-bottom: 1px solid #2d3748; }
+            .drawer-header h3 { margin: 0; color: #edf2f7; font-size: 1.2rem; }
+            .close-btn { background: none; border: none; color: #a0aec0; font-size: 1.5rem; cursor: pointer; }
+            .close-btn:hover { color: white; }
+            .nav-menu { list-style: none; padding: 0; margin: 15px 0 0 0; }
+            .nav-menu li a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: #cbd5e0; text-decoration: none; font-weight: bold; transition: background 0.2s, color 0.2s; }
+            .nav-menu li a:hover, .nav-menu li a.active { background: #2b6cb0; color: white; }
+            .nav-menu li.logout-item { margin-top: 20px; border-top: 1px solid #2d3748; }
+            .nav-menu li.logout-item a { color: #feb2b2; }
+            .nav-menu li.logout-item a:hover { background: #c53030; color: white; }
+
             .user-profile-bar { display: flex; align-items: center; gap: 10px; background: #ebf8ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; }
+
+            /* タブコンテンツ切替制御クラス */
+            .view-section { display: none; }
+            .view-section.active { display: block; }
         </style>
     </head>
     <body>
+        <!-- ナビゲーションドロワー用オーバーレイ -->
+        <div id="nav-overlay" class="nav-overlay" onclick="toggleMenu(false)"></div>
+
+        <!-- サイドハンバーガーメニュー -->
+        <nav id="nav-drawer" class="nav-drawer">
+            <div class="drawer-header">
+                <h3>📌 メニュー</h3>
+                <button class="close-btn" onclick="toggleMenu(false)">✕</button>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#" id="nav-timeline" class="active" onclick="switchView('timeline', event)">👥 タイムライン</a></li>
+                <li><a href="#" id="nav-task-check" onclick="switchView('task-check', event)">✅ タスクのチェック</a></li>
+                <li><a href="#" id="nav-task-complete" onclick="switchView('task-complete', event)">📝 タスクの完備</a></li>
+                <li><a href="#" id="nav-password-change" onclick="switchView('password-change', event)">🔒 パスワード変更</a></li>
+                <li class="logout-item"><a href="/logout">🚪 ログアウト</a></li>
+            </ul>
+        </nav>
+
+        <!-- ヘッダーバー -->
         <div class="header-bar">
-            <h1>習慣トラッカー - ダッシュボード & タイムライン</h1>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="hamburger-btn" onclick="toggleMenu(true)" title="メニューを開く">☰</button>
+                <h1 style="margin: 0; font-size: 1.4rem;" id="page-title">習慣トラッカー - タイムライン</h1>
+            </div>
             <div>
-                <span style="margin-right: 10px; font-weight: bold;">ログイン中: {{currentUser}}</span>
-                <a href="/logout" class="btn btn-danger">ログアウト</a>
+                <span style="font-weight: bold;">ログイン中: {{currentUser}}</span>
             </div>
         </div>
 
-        <!-- ユーザープロフィール設定 -->
-        <div class="user-profile-bar card">
-            <span style="font-weight: bold;">現在のユーザー設定:</span>
-            <span id="user-display" style="font-size: 1.2em;">👤 テストユーザー</span>
-            <input type="text" id="user-emoji-input" style="width: 50px; text-align: center; font-size: 1.2em;" value="👤">
-            <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
-        </div>
-
-        <!-- パスワード変更セクション -->
-        <div class="card">
-            <h2>🔒 パスワード変更</h2>
-            <form id="change-password-form" onsubmit="changePassword(event)">
-                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                    <div class="form-group" style="flex: 1; min-width: 200px;">
-                        <label for="current-password">現在のパスワード</label>
-                        <input type="password" id="current-password" required placeholder="現在のパスワード">
-                    </div>
-                    <div class="form-group" style="flex: 1; min-width: 200px;">
-                        <label for="new-password">新しいパスワード</label>
-                        <input type="password" id="new-password" required placeholder="新しいパスワード">
+        <!-- 1. タイムラインセクション（デフォルト表示） -->
+        <section id="section-timeline" class="view-section active">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <h2 style="margin: 0;">👥 タイムライン</h2>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label for="group-filter" style="font-weight: bold;">表示フィルタ:</label>
+                        <select id="group-filter" onchange="loadTimeline()" style="padding: 6px 12px; border: 1px solid #cbd5e0; border-radius: 6px;">
+                            <option value="all">すべての投稿</option>
+                        </select>
                     </div>
                 </div>
-                <button type="submit" class="btn">パスワードを変更</button>
-            </form>
-        </div>
+                <div id="timeline-list">読み込み中...</div>
+            </div>
+        </section>
 
-        <!-- グループ管理セクション -->
-        <div class="card">
-            <h2>👥 所属グループ管理</h2>
-            <div id="groups-list" style="margin-bottom: 15px;">読み込み中...</div>
-            <hr style="border: 0; border-top: 1px solid #edf2f7; margin: 15px 0;">
-            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                <form id="create-group-form" onsubmit="createGroup(event)" style="flex: 1; min-width: 250px;">
+        <!-- 2. タスクのチェックセクション -->
+        <section id="section-task-check" class="view-section">
+            <div class="card">
+                <h2>✅ マイ習慣一覧（ワンタップ実行）</h2>
+                <div id="habits-list">読み込み中...</div>
+            </div>
+        </section>
+
+        <!-- 3. タスクの完備セクション（習慣登録・グループ管理） -->
+        <section id="section-task-complete" class="view-section">
+            <!-- 習慣登録フォーム -->
+            <div class="card">
+                <h2>新しい習慣を登録</h2>
+                <form id="create-habit-form" onsubmit="createHabit(event)">
                     <div class="form-group">
-                        <label for="group-name">新規グループ作成</label>
-                        <input type="text" id="group-name" required placeholder="例: 家族チーム, 開発部">
+                        <label for="title">習慣のタイトル</label>
+                        <input type="text" id="title" required placeholder="例: 毎朝散歩する">
                     </div>
-                    <button type="submit" class="btn">グループを作成</button>
-                </form>
-                <form id="join-group-form" onsubmit="joinGroup(event)" style="flex: 1; min-width: 250px;">
                     <div class="form-group">
-                        <label for="invite-code">招待コードで参加</label>
-                        <input type="text" id="invite-code" required placeholder="例: A1B2C3D4">
+                        <label for="emoji">タスク絵文字</label>
+                        <input type="text" id="emoji" value="📝" placeholder="例: 🏃, 📚, 🧘">
                     </div>
-                    <button type="submit" class="btn btn-success">グループに参加</button>
+                    <div class="form-group">
+                        <label for="description">詳細メモ（任意）</label>
+                        <input type="text" id="description" placeholder="例: 20分以上">
+                    </div>
+                    <div class="form-group">
+                        <label for="frequency">頻度</label>
+                        <select id="frequency">
+                            <option value="Daily">毎日</option>
+                            <option value="Weekly">毎週</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn">習慣を追加</button>
                 </form>
             </div>
-        </div>
 
-        <!-- 習慣登録フォーム -->
-        <div class="card">
-            <h2>新しい習慣を登録</h2>
-            <form id="create-habit-form" onsubmit="createHabit(event)">
-                <div class="form-group">
-                    <label for="title">習慣のタイトル</label>
-                    <input type="text" id="title" required placeholder="例: 毎朝散歩する">
-                </div>
-                <div class="form-group">
-                    <label for="emoji">タスク絵文字</label>
-                    <input type="text" id="emoji" value="📝" placeholder="例: 🏃, 📚, 🧘">
-                </div>
-                <div class="form-group">
-                    <label for="description">詳細メモ（任意）</label>
-                    <input type="text" id="description" placeholder="例: 20分以上">
-                </div>
-                <div class="form-group">
-                    <label for="frequency">頻度</label>
-                    <select id="frequency">
-                        <option value="Daily">毎日</option>
-                        <option value="Weekly">毎週</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn">習慣を追加</button>
-            </form>
-        </div>
-
-        <!-- 本日の習慣一覧 & ワンタップ実行 -->
-        <div class="card">
-            <h2>マイ習慣一覧（ワンタップ実行）</h2>
-            <div id="habits-list">読み込み中...</div>
-        </div>
-
-        <!-- タイムライン -->
-        <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                <h2 style="margin: 0;">👥 タイムライン</h2>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <label for="group-filter" style="font-weight: bold;">表示フィルタ:</label>
-                    <select id="group-filter" onchange="loadTimeline()" style="padding: 6px 12px; border: 1px solid #cbd5e0; border-radius: 6px;">
-                        <option value="all">すべての投稿</option>
-                    </select>
+            <!-- グループ管理セクション -->
+            <div class="card">
+                <h2>👥 所属グループ管理</h2>
+                <div id="groups-list" style="margin-bottom: 15px;">読み込み中...</div>
+                <hr style="border: 0; border-top: 1px solid #edf2f7; margin: 15px 0;">
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <form id="create-group-form" onsubmit="createGroup(event)" style="flex: 1; min-width: 250px;">
+                        <div class="form-group">
+                            <label for="group-name">新規グループ作成</label>
+                            <input type="text" id="group-name" required placeholder="例: 家族チーム, 開発部">
+                        </div>
+                        <button type="submit" class="btn">グループを作成</button>
+                    </form>
+                    <form id="join-group-form" onsubmit="joinGroup(event)" style="flex: 1; min-width: 250px;">
+                        <div class="form-group">
+                            <label for="invite-code">招待コードで参加</label>
+                            <input type="text" id="invite-code" required placeholder="例: A1B2C3D4">
+                        </div>
+                        <button type="submit" class="btn btn-success">グループに参加</button>
+                    </form>
                 </div>
             </div>
-            <div id="timeline-list">読み込み中...</div>
-        </div>
+        </section>
+
+        <!-- 4. パスワード変更セクション（ユーザー設定含む） -->
+        <section id="section-password-change" class="view-section">
+            <!-- ユーザープロフィール設定 -->
+            <div class="user-profile-bar card">
+                <span style="font-weight: bold;">現在のユーザー設定:</span>
+                <span id="user-display" style="font-size: 1.2em;">👤 テストユーザー</span>
+                <input type="text" id="user-emoji-input" style="width: 50px; text-align: center; font-size: 1.2em;" value="👤">
+                <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
+            </div>
+
+            <!-- パスワード変更カード -->
+            <div class="card">
+                <h2>🔒 パスワード変更</h2>
+                <form id="change-password-form" onsubmit="changePassword(event)">
+                    <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                        <div class="form-group" style="flex: 1; min-width: 200px;">
+                            <label for="current-password">現在のパスワード</label>
+                            <input type="password" id="current-password" required placeholder="現在のパスワード">
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 200px;">
+                            <label for="new-password">新しいパスワード</label>
+                            <input type="password" id="new-password" required placeholder="新しいパスワード">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn">パスワードを変更</button>
+                </form>
+            </div>
+        </section>
 
         <script>
             let currentUserId = 1;
             let currentUserEmoji = '👤';
             let currentUserName = '{{currentUser}}';
+
+            /**
+             * ハンバーガーメニューの開閉を制御します。
+             * @param {boolean} open メニューを開く場合はtrue、閉じる場合はfalse
+             */
+            function toggleMenu(open) {
+                const drawer = document.getElementById('nav-drawer');
+                const overlay = document.getElementById('nav-overlay');
+                if (open) {
+                    drawer.classList.add('open');
+                    overlay.classList.add('open');
+                } else {
+                    drawer.classList.remove('open');
+                    overlay.classList.remove('open');
+                }
+            }
+
+            /**
+             * ナビゲーション選択時に表示するセクションを切り替えます。
+             * @param {string} viewName 表示対象の画面名 ('timeline', 'task-check', 'task-complete', 'password-change')
+             * @param {Event} event イベントオブジェクト
+             */
+            function switchView(viewName, event) {
+                if (event) event.preventDefault();
+
+                // すべてのセクションを非表示
+                const sections = document.querySelectorAll('.view-section');
+                sections.forEach(s => s.classList.remove('active'));
+
+                // メニューリンクのactiveクラス解除
+                const navLinks = document.querySelectorAll('.nav-menu li a');
+                navLinks.forEach(l => l.classList.remove('active'));
+
+                // 対象セクションおよびナビリンクをアクティブ化
+                const targetSection = document.getElementById(`section-${viewName}`);
+                const targetLink = document.getElementById(`nav-${viewName}`);
+                const pageTitle = document.getElementById('page-title');
+
+                if (targetSection) targetSection.classList.add('active');
+                if (targetLink) targetLink.classList.add('active');
+
+                // タイトル切り替え
+                switch (viewName) {
+                    case 'timeline':
+                        pageTitle.innerText = '習慣トラッカー - タイムライン';
+                        loadTimeline();
+                        break;
+                    case 'task-check':
+                        pageTitle.innerText = '習慣トラッカー - タスクのチェック';
+                        loadHabits();
+                        break;
+                    case 'task-complete':
+                        pageTitle.innerText = '習慣トラッカー - タスクの完備';
+                        loadGroups();
+                        break;
+                    case 'password-change':
+                        pageTitle.innerText = '習慣トラッカー - パスワード変更';
+                        break;
+                }
+
+                toggleMenu(false);
+            }
 
             async function loadUser() {
                 const res = await fetch(`/api/users/me`);
@@ -559,6 +678,7 @@ app.MapGet("/", (HttpContext context) =>
                     document.getElementById('create-habit-form').reset();
                     document.getElementById('emoji').value = '📝';
                     loadHabits();
+                    alert('新しい習慣を追加しました！');
                 } else {
                     alert('習慣の追加に失敗しました。');
                 }
@@ -782,10 +902,9 @@ app.MapGet("/", (HttpContext context) =>
                 return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             }
 
-            // 初期ロード
+            // 初期ロード（デフォルトでタイムラインを表示）
             loadUser();
             loadGroups();
-            loadHabits();
             loadTimeline();
         </script>
     </body>
