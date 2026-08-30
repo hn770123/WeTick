@@ -57,6 +57,7 @@ void InitializeDatabase(string connStr)
             Name TEXT NOT NULL,
             Email TEXT NOT NULL,
             Emoji TEXT NOT NULL DEFAULT '👤',
+            Password TEXT,
             CreatedAt TEXT NOT NULL
         );
     ");
@@ -65,6 +66,16 @@ void InitializeDatabase(string connStr)
     try
     {
         connection.Execute("ALTER TABLE Users ADD COLUMN Emoji TEXT NOT NULL DEFAULT '👤';");
+    }
+    catch
+    {
+        // カラムが既に存在する場合は無視します
+    }
+
+    // 既存の Users テーブルに Password カラムが存在しない場合は追加する（マイグレーション）
+    try
+    {
+        connection.Execute("ALTER TABLE Users ADD COLUMN Password TEXT;");
     }
     catch
     {
@@ -158,9 +169,14 @@ void InitializeDatabase(string connStr)
 
     // デフォルトのテスト用初期ユーザーが存在しない場合は追加
     connection.Execute(@"
-        INSERT INTO Users (Id, Name, Email, Emoji, CreatedAt)
-        SELECT 1, 'テストユーザー', 'test@example.com', '👤', '2025-01-01T00:00:00Z'
+        INSERT INTO Users (Id, Name, Email, Emoji, Password, CreatedAt)
+        SELECT 1, 'admin', 'test@example.com', '👤', 'secret-password', '2025-01-01T00:00:00Z'
         WHERE NOT EXISTS (SELECT 1 FROM Users WHERE Id = 1);
+    ");
+
+    // 初期ユーザーのパスワードが未設定の場合はデフォルトパスワードを設定
+    connection.Execute(@"
+        UPDATE Users SET Password = 'secret-password' WHERE Id = 1 AND (Password IS NULL OR Password = '');
     ");
 }
 
@@ -219,6 +235,7 @@ app.MapGet("/login", (HttpContext context) =>
 
 /// <summary>
 /// ログイン処理 エンドポイント（POST）
+/// ユーザーが存在しない場合は自動で新規登録を行い、既存ユーザーの場合はパスワード検証を行います。
 /// </summary>
 app.MapPost("/login", async (HttpContext context) =>
 {
@@ -226,12 +243,53 @@ app.MapPost("/login", async (HttpContext context) =>
     string username = form["Username"].ToString();
     string password = form["Password"].ToString();
 
-    // ユーザー名とパスワードの簡易検証（Auth.md 準拠）
-    if (username == "admin" && password == "secret-password")
+    if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+    {
+        return Results.Redirect("/login?error=" + Uri.EscapeDataString("ユーザー名とパスワードを入力してください。"));
+    }
+
+    using var connection = new SqliteConnection(connectionString);
+    var existingUser = connection.QuerySingleOrDefault<User>(
+        "SELECT Id, Name, Email, Emoji, Password, CreatedAt FROM Users WHERE Name = @Name",
+        new { Name = username });
+
+    if (existingUser is null)
+    {
+        // ユーザーが存在しない場合は新規自動登録を行う
+        string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        string email = $"{username.ToLower()}@example.com";
+        string insertSql = @"
+            INSERT INTO Users (Name, Email, Emoji, Password, CreatedAt)
+            VALUES (@Name, @Email, '👤', @Password, @CreatedAt);
+            SELECT last_insert_rowid();";
+
+        int newUserId = connection.ExecuteScalar<int>(insertSql, new
+        {
+            Name = username,
+            Email = email,
+            Password = password,
+            CreatedAt = createdAt
+        });
+
+        var newClaims = new List<Claim>
+        {
+            new Claim(ClaimTypes.Name, username),
+            new Claim(ClaimTypes.NameIdentifier, newUserId.ToString())
+        };
+
+        var newIdentity = new ClaimsIdentity(newClaims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(newIdentity));
+
+        return Results.Redirect("/");
+    }
+
+    // 既存ユーザーの場合はパスワードをチェック
+    if (existingUser.Password == password)
     {
         var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.Name, username)
+            new Claim(ClaimTypes.Name, existingUser.Name),
+            new Claim(ClaimTypes.NameIdentifier, existingUser.Id.ToString())
         };
 
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
@@ -317,6 +375,24 @@ app.MapGet("/", (HttpContext context) =>
             <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
         </div>
 
+        <!-- パスワード変更セクション -->
+        <div class="card">
+            <h2>🔒 パスワード変更</h2>
+            <form id="change-password-form" onsubmit="changePassword(event)">
+                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 200px;">
+                        <label for="current-password">現在のパスワード</label>
+                        <input type="password" id="current-password" required placeholder="現在のパスワード">
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 200px;">
+                        <label for="new-password">新しいパスワード</label>
+                        <input type="password" id="new-password" required placeholder="新しいパスワード">
+                    </div>
+                </div>
+                <button type="submit" class="btn">パスワードを変更</button>
+            </form>
+        </div>
+
         <!-- グループ管理セクション -->
         <div class="card">
             <h2>👥 所属グループ管理</h2>
@@ -388,16 +464,17 @@ app.MapGet("/", (HttpContext context) =>
         </div>
 
         <script>
-            const USER_ID = 1; // デフォルトユーザーID
+            let currentUserId = 1;
             let currentUserEmoji = '👤';
-            let currentUserName = 'テストユーザー';
+            let currentUserName = '{{currentUser}}';
 
             async function loadUser() {
-                const res = await fetch(`/api/users/${USER_ID}`);
+                const res = await fetch(`/api/users/me`);
                 if (res.ok) {
                     const u = await res.json();
+                    currentUserId = u.id;
                     currentUserEmoji = u.emoji || '👤';
-                    currentUserName = u.name || 'テストユーザー';
+                    currentUserName = u.name || '{{currentUser}}';
                     document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
                     document.getElementById('user-emoji-input').value = currentUserEmoji;
                 }
@@ -405,7 +482,7 @@ app.MapGet("/", (HttpContext context) =>
 
             async function updateUserEmoji() {
                 const emoji = document.getElementById('user-emoji-input').value || '👤';
-                const res = await fetch(`/api/users/${USER_ID}`, {
+                const res = await fetch(`/api/users/${currentUserId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: currentUserName, emoji: emoji })
@@ -421,8 +498,28 @@ app.MapGet("/", (HttpContext context) =>
                 }
             }
 
+            async function changePassword(e) {
+                e.preventDefault();
+                const currentPassword = document.getElementById('current-password').value;
+                const newPassword = document.getElementById('new-password').value;
+
+                const res = await fetch('/api/users/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ currentPassword, newPassword })
+                });
+
+                if (res.ok) {
+                    document.getElementById('change-password-form').reset();
+                    alert('🔒 パスワードを変更しました！');
+                } else {
+                    const err = await res.json();
+                    alert(err.message || 'パスワードの変更に失敗しました。');
+                }
+            }
+
             async function loadHabits() {
-                const res = await fetch(`/api/habits?userId=${USER_ID}`);
+                const res = await fetch(`/api/habits?userId=${currentUserId}`);
                 const habits = await res.json();
                 const container = document.getElementById('habits-list');
 
@@ -455,7 +552,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch('/api/habits', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, title, description, emoji, frequency })
+                    body: JSON.stringify({ userId: currentUserId, title, description, emoji, frequency })
                 });
 
                 if (res.ok) {
@@ -471,7 +568,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch(`/api/habits/${habitId}/execute`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, comment: 'ワンタップ実行！' })
+                    body: JSON.stringify({ userId: currentUserId, comment: 'ワンタップ実行！' })
                 });
 
                 if (res.ok) {
@@ -485,7 +582,7 @@ app.MapGet("/", (HttpContext context) =>
             let userGroups = [];
 
             async function loadGroups() {
-                const res = await fetch(`/api/groups?userId=${USER_ID}`);
+                const res = await fetch(`/api/groups?userId=${currentUserId}`);
                 if (!res.ok) return;
                 userGroups = await res.json();
 
@@ -531,7 +628,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch('/api/groups', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, name })
+                    body: JSON.stringify({ userId: currentUserId, name })
                 });
 
                 if (res.ok) {
@@ -551,7 +648,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch('/api/groups/join', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, inviteCode })
+                    body: JSON.stringify({ userId: currentUserId, inviteCode })
                 });
 
                 if (res.ok) {
@@ -618,7 +715,7 @@ app.MapGet("/", (HttpContext context) =>
                                         </div>
                                         <div style="display: flex; align-items: center; gap: 6px;">
                                             <small style="color: #a0aec0;">${new Date(c.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</small>
-                                            ${c.userId === USER_ID ? `<button style="background: none; border: none; color: #e53e3e; cursor: pointer; font-size: 0.8em;" onclick="deleteComment(${c.id})">❌</button>` : ''}
+                                            ${c.userId === currentUserId ? `<button style="background: none; border: none; color: #e53e3e; cursor: pointer; font-size: 0.8em;" onclick="deleteComment(${c.id})">❌</button>` : ''}
                                         </div>
                                     </div>
                                 `).join('')}
@@ -636,7 +733,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch(`/api/logs/${logId}/reactions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, reactionType: emoji })
+                    body: JSON.stringify({ userId: currentUserId, reactionType: emoji })
                 });
 
                 if (res.ok) {
@@ -656,7 +753,7 @@ app.MapGet("/", (HttpContext context) =>
                 const res = await fetch(`/api/logs/${logId}/comments`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: USER_ID, commentText: text })
+                    body: JSON.stringify({ userId: currentUserId, commentText: text })
                 });
 
                 if (res.ok) {
@@ -712,6 +809,25 @@ app.MapGet("/health/db", () =>
 // ------------------------------------------------------------
 
 /// <summary>
+/// 現在ログイン中のユーザー情報を取得します。
+/// </summary>
+app.MapGet("/api/users/me", (HttpContext context) =>
+{
+    string? username = context.User.Identity?.Name;
+    if (string.IsNullOrEmpty(username))
+    {
+        return Results.Unauthorized();
+    }
+
+    using var connection = new SqliteConnection(connectionString);
+    var user = connection.QuerySingleOrDefault<User>(
+        "SELECT Id, Name, Email, Emoji, CreatedAt FROM Users WHERE Name = @Name",
+        new { Name = username });
+
+    return user is not null ? Results.Ok(user) : Results.NotFound(new { message = "ユーザー情報が見つかりません。" });
+}).RequireAuthorization();
+
+/// <summary>
 /// 指定された ID のユーザー情報を取得します。
 /// </summary>
 app.MapGet("/api/users/{id:int}", (int id) =>
@@ -750,6 +866,44 @@ app.MapPut("/api/users/{id:int}", (int id, UpdateUserDto dto) =>
 
     return Results.Ok(new { message = "ユーザー情報が正常に更新されました。", id, name = dto.Name, emoji });
 });
+
+/// <summary>
+/// ログイン中のユーザーのパスワードを変更します。
+/// </summary>
+app.MapPost("/api/users/change-password", (HttpContext context, ChangePasswordDto dto) =>
+{
+    string? username = context.User.Identity?.Name;
+    if (string.IsNullOrEmpty(username))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (string.IsNullOrWhiteSpace(dto.CurrentPassword) || string.IsNullOrWhiteSpace(dto.NewPassword))
+    {
+        return Results.BadRequest(new { message = "現在のパスワードと新しいパスワードを両方入力してください。" });
+    }
+
+    using var connection = new SqliteConnection(connectionString);
+    var user = connection.QuerySingleOrDefault<User>(
+        "SELECT Id, Name, Password FROM Users WHERE Name = @Name",
+        new { Name = username });
+
+    if (user is null)
+    {
+        return Results.NotFound(new { message = "ユーザーが見つかりません。" });
+    }
+
+    if (user.Password != dto.CurrentPassword)
+    {
+        return Results.BadRequest(new { message = "現在のパスワードが正しくありません。" });
+    }
+
+    connection.Execute(
+        "UPDATE Users SET Password = @NewPassword WHERE Id = @Id",
+        new { NewPassword = dto.NewPassword.Trim(), Id = user.Id });
+
+    return Results.Ok(new { message = "パスワードが正常に変更されました。" });
+}).RequireAuthorization();
 
 // ------------------------------------------------------------
 // 習慣（Habit）管理 API エンドポイント
@@ -1445,6 +1599,7 @@ public class User
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Emoji { get; set; } = "👤";
+    public string? Password { get; set; }
     public string CreatedAt { get; set; } = string.Empty;
 }
 
@@ -1565,6 +1720,11 @@ public record ExecuteHabitDto(int UserId, string? Comment);
 /// ユーザー情報を更新するための DTO リクエストモデルです。
 /// </summary>
 public record UpdateUserDto(string Name, string? Emoji);
+
+/// <summary>
+/// パスワード変更用の DTO リクエストモデルです。
+/// </summary>
+public record ChangePasswordDto(string CurrentPassword, string NewPassword);
 
 /// <summary>
 /// リアクションを追加するための DTO リクエストモデルです。
