@@ -1,0 +1,18 @@
+@*
+    モジュール名: _Layout.cshtml
+    説明: アプリケーション全体の共通レイアウトを提供するRazorビューです。
+*@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@ViewData["Title"] - HabitTracker</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    @RenderSection("Styles", required: false)
+</head>
+<body>
+    @RenderBody()
+    @RenderSection("Scripts", required: false)
+</body>
+</html>
