@@ -1,6 +1,6 @@
 @*
     モジュール名: Views/Index.cshtml
-    説明: HabitTracker のメインダッシュボード画面ビューテンプレート（htmx統合）です。
+    説明: HabitTracker のメインダッシュボード画面ビューテンプレート（htmx統合・ボトムナビゲーション・Pico.css対応）です。
 *@
 @model DashboardViewModel
 @{
@@ -10,208 +10,245 @@
 
 @section Styles {
     <style>
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f7f9fa; color: #333; }
-        h1, h2 { color: #1a202c; }
-        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .habit-item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #edf2f7; padding: 12px 0; }
-        .habit-item:last-child { border-bottom: none; }
-        .btn { background-color: #3182ce; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block; }
-        .btn:hover { background-color: #2b6cb0; }
-        .btn-danger { background-color: #e53e3e; }
-        .btn-danger:hover { background-color: #c53030; }
-        .btn-success { background-color: #38a169; }
-        .btn-success:hover { background-color: #2f855a; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; box-sizing: border-box; }
-        .timeline-item { background: #ffffff; border: 1px solid #e2e8f0; border-left: 5px solid #3182ce; padding: 15px; margin-bottom: 12px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .timeline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-        .user-info { display: flex; align-items: center; gap: 8px; font-weight: bold; }
-        .user-emoji { font-size: 1.4em; }
-        .habit-title { display: flex; align-items: center; gap: 6px; font-size: 1.1em; font-weight: bold; color: #2d3748; margin-bottom: 6px; }
-        .task-emoji { font-size: 1.3em; }
-        .reaction-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-        .reaction-badge { background: #edf2f7; padding: 4px 8px; border-radius: 12px; font-size: 0.9em; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-        .reaction-badge:hover { background: #e2e8f0; }
-        .btn-reaction { background: #f7fafc; border: 1px solid #cbd5e0; padding: 4px 8px; border-radius: 12px; cursor: pointer; font-size: 0.9em; }
-        .btn-reaction:hover { background: #e2e8f0; }
-        .comments-section { margin-top: 12px; border-top: 1px dashed #e2e8f0; padding-top: 10px; font-size: 0.9em; }
-        .comment-item { display: flex; justify-content: space-between; align-items: center; background: #f7fafc; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
-        .comment-form { display: flex; gap: 6px; margin-top: 8px; }
-        .comment-input { flex: 1; padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9em; }
+        /* ボトムナビゲーション固定表示のための画面余白 */
+        body {
+            padding-bottom: 80px;
+        }
 
-        /* ヘッダー＆ハンバーガーメニュー用のスタイル設定 */
-        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; background: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .hamburger-btn { background: none; border: none; font-size: 1.8rem; cursor: pointer; padding: 0 8px; line-height: 1; color: #2d3748; }
-        .hamburger-btn:hover { color: #3182ce; }
-        .nav-drawer { position: fixed; top: 0; left: -280px; width: 280px; height: 100vh; background: #1a202c; color: white; transition: left 0.3s ease; z-index: 1000; padding: 20px 0; box-shadow: 2px 0 10px rgba(0,0,0,0.2); }
-        .nav-drawer.open { left: 0; }
-        .nav-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.4); display: none; z-index: 999; }
-        .nav-overlay.open { display: block; }
-        .drawer-header { display: flex; justify-content: space-between; align-items: center; padding: 0 20px 20px 20px; border-bottom: 1px solid #2d3748; }
-        .drawer-header h3 { margin: 0; color: #edf2f7; font-size: 1.2rem; }
-        .close-btn { background: none; border: none; color: #a0aec0; font-size: 1.5rem; cursor: pointer; }
-        .close-btn:hover { color: white; }
-        .nav-menu { list-style: none; padding: 0; margin: 15px 0 0 0; }
-        .nav-menu li a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: #cbd5e0; text-decoration: none; font-weight: bold; transition: background 0.2s, color 0.2s; }
-        .nav-menu li a:hover, .nav-menu li a.active { background: #2b6cb0; color: white; }
-        .nav-menu li.logout-item { margin-top: 20px; border-top: 1px solid #2d3748; }
-        .nav-menu li.logout-item a { color: #feb2b2; }
-        .nav-menu li.logout-item a:hover { background: #c53030; color: white; }
+        /* 画面下部固定ボトムナビゲーションバーのスタイル設定 */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background-color: var(--pico-card-background-color, #18232c);
+            border-top: 1px solid var(--pico-muted-border-color, #2d3843);
+            padding: 8px 0;
+            z-index: 1000;
+            margin: 0;
+        }
 
-        .user-profile-bar { display: flex; align-items: center; gap: 10px; background: #ebf8ff; padding: 12px; border-radius: 6px; margin-bottom: 20px; }
+        .bottom-nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-decoration: none;
+            color: var(--pico-secondary, #94a3b8);
+            font-size: 0.8rem;
+            font-weight: bold;
+            flex: 1;
+            text-align: center;
+            padding: 4px 0;
+        }
+
+        .bottom-nav-item .nav-icon {
+            font-size: 1.4rem;
+            line-height: 1.2;
+        }
+
+        .bottom-nav-item.active {
+            color: var(--pico-primary, #3b82f6);
+        }
+
+        .bottom-nav-item:hover {
+            color: var(--pico-primary-hover, #60a5fa);
+        }
 
         /* タブコンテンツ切替制御クラス */
-        .view-section { display: none; }
-        .view-section.active { display: block; }
+        .view-section {
+            display: none;
+        }
+
+        .view-section.active {
+            display: block;
+        }
+
+        /* タイムライン・リスト補助スタイル */
+        .habit-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--pico-muted-border-color, #2d3843);
+        }
+
+        .habit-item:last-child {
+            border-bottom: none;
+        }
+
+        .timeline-item {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-left: 4px solid var(--pico-primary, #3b82f6);
+        }
+
+        .reaction-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .reaction-badge {
+            background: var(--pico-muted-border-color, #2d3843);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+
+        .comment-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 10px;
+            margin-bottom: 6px;
+            background: var(--pico-muted-border-color, #1e293b);
+            border-radius: 6px;
+        }
     </style>
 }
 
-<!-- ナビゲーションドロワー用オーバーレイ -->
-<div id="nav-overlay" class="nav-overlay" onclick="toggleMenu(false)"></div>
-
-<!-- サイドハンバーガーメニュー -->
-<nav id="nav-drawer" class="nav-drawer">
-    <div class="drawer-header">
-        <h3>📌 メニュー</h3>
-        <button class="close-btn" onclick="toggleMenu(false)">✕</button>
-    </div>
-    <ul class="nav-menu">
-        <li><a href="#" id="nav-timeline" class="active" onclick="switchView('timeline', event)">👥 タイムライン</a></li>
-        <li><a href="#" id="nav-task-check" onclick="switchView('task-check', event)">✅ タスクのチェック</a></li>
-        <li><a href="#" id="nav-task-complete" onclick="switchView('task-complete', event)">📝 タスクの完備</a></li>
-        <li><a href="#" id="nav-password-change" onclick="switchView('password-change', event)">🔒 パスワード変更</a></li>
-        <li class="logout-item"><a href="/logout">🚪 ログアウト</a></li>
-    </ul>
-</nav>
-
 <!-- ヘッダーバー -->
-<div class="header-bar">
-    <div style="display: flex; align-items: center; gap: 12px;">
-        <button class="hamburger-btn" onclick="toggleMenu(true)" title="メニューを開く">☰</button>
-        <h1 style="margin: 0; font-size: 1.4rem;" id="page-title">習慣トラッカー - タイムライン</h1>
-    </div>
+<header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h2 style="margin: 0; font-size: 1.4rem;" id="page-title">習慣トラッカー - タイムライン</h2>
     <div>
-        <span style="font-weight: bold;">ログイン中: @Model.CurrentUser</span>
+        <small style="font-weight: bold;">ログイン中: @Model.CurrentUser</small>
     </div>
-</div>
+</header>
 
 <!-- 1. タイムラインセクション（デフォルト表示） -->
 <section id="section-timeline" class="view-section active">
-    <div class="card">
+    <article>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-            <h2 style="margin: 0;">👥 タイムライン</h2>
+            <h3 style="margin: 0;">👥 タイムライン</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
-                <label for="group-filter" style="font-weight: bold;">表示フィルタ:</label>
-                <select id="group-filter" onchange="loadTimeline()" style="padding: 6px 12px; border: 1px solid #cbd5e0; border-radius: 6px;">
+                <label for="group-filter" style="font-weight: bold; margin-bottom: 0;">表示フィルタ:</label>
+                <select id="group-filter" onchange="loadTimeline()" style="margin-bottom: 0; padding: 4px 8px;">
                     <option value="all">すべての投稿</option>
                 </select>
             </div>
         </div>
         <div id="timeline-list">読み込み中...</div>
-    </div>
+    </article>
 </section>
 
 <!-- 2. タスクのチェックセクション -->
 <section id="section-task-check" class="view-section">
-    <div class="card">
-        <h2>✅ マイ習慣一覧（ワンタップ実行）</h2>
+    <article>
+        <h3>✅ マイ習慣一覧（ワンタップ実行）</h3>
         <div id="habits-list">読み込み中...</div>
-    </div>
+    </article>
 </section>
 
-<!-- 3. タスクの完備セクション（習慣登録・グループ管理） -->
-<section id="section-task-complete" class="view-section">
+<!-- 3. 設定セクション（タスク管理 / 所属グループ管理 / パスワード・プロフィール変更 / ログアウト） -->
+<section id="section-settings" class="view-section">
     <!-- 習慣登録フォーム -->
-    <div class="card">
-        <h2>新しい習慣を登録</h2>
+    <article>
+        <h3>📝 新しい習慣を登録</h3>
         <form id="create-habit-form" onsubmit="createHabit(event)">
-            <div class="form-group">
-                <label for="title">習慣のタイトル</label>
+            <label for="title">習慣のタイトル
                 <input type="text" id="title" required placeholder="例: 毎朝散歩する">
+            </label>
+            <div class="grid">
+                <label for="emoji">タスク絵文字
+                    <input type="text" id="emoji" value="📝" placeholder="例: 🏃, 📚, 🧘">
+                </label>
+                <label for="frequency">頻度
+                    <select id="frequency">
+                        <option value="Daily">毎日</option>
+                        <option value="Weekly">毎週</option>
+                    </select>
+                </label>
             </div>
-            <div class="form-group">
-                <label for="emoji">タスク絵文字</label>
-                <input type="text" id="emoji" value="📝" placeholder="例: 🏃, 📚, 🧘">
-            </div>
-            <div class="form-group">
-                <label for="description">詳細メモ（任意）</label>
+            <label for="description">詳細メモ（任意）
                 <input type="text" id="description" placeholder="例: 20分以上">
-            </div>
-            <div class="form-group">
-                <label for="frequency">頻度</label>
-                <select id="frequency">
-                    <option value="Daily">毎日</option>
-                    <option value="Weekly">毎週</option>
-                </select>
-            </div>
-            <button type="submit" class="btn">習慣を追加</button>
+            </label>
+            <button type="submit">習慣を追加</button>
         </form>
-    </div>
+    </article>
 
-    <!-- 登録済み習慣の管理・編集・削除セクション -->
-    <div class="card">
-        <h2>🛠️ 習慣（タスク）の管理</h2>
+    <!-- 登録済み習慣の管理・編集・削除 -->
+    <article>
+        <h3>🛠️ 習慣（タスク）の管理</h3>
         <div id="manage-habits-list">読み込み中...</div>
-    </div>
+    </article>
 
-    <!-- グループ管理セクション -->
-    <div class="card">
-        <h2>👥 所属グループ管理</h2>
+    <!-- グループ管理 -->
+    <article>
+        <h3>👥 所属グループ管理</h3>
         <div id="groups-list" style="margin-bottom: 15px;">読み込み中...</div>
-        <hr style="border: 0; border-top: 1px solid #edf2f7; margin: 15px 0;">
-        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-            <form id="create-group-form" onsubmit="createGroup(event)" style="flex: 1; min-width: 250px;">
-                <div class="form-group">
-                    <label for="group-name">新規グループ作成</label>
+        <hr>
+        <div class="grid">
+            <form id="create-group-form" onsubmit="createGroup(event)">
+                <label for="group-name">新規グループ作成
                     <input type="text" id="group-name" required placeholder="例: 家族チーム, 開発部">
-                </div>
-                <button type="submit" class="btn">グループを作成</button>
+                </label>
+                <button type="submit">グループを作成</button>
             </form>
-            <form id="join-group-form" onsubmit="joinGroup(event)" style="flex: 1; min-width: 250px;">
-                <div class="form-group">
-                    <label for="invite-code">招待コードで参加</label>
+            <form id="join-group-form" onsubmit="joinGroup(event)">
+                <label for="invite-code">招待コードで参加
                     <input type="text" id="invite-code" required placeholder="例: A1B2C3D4">
-                </div>
-                <button type="submit" class="btn btn-success">グループに参加</button>
+                </label>
+                <button type="submit" class="secondary">グループに参加</button>
             </form>
         </div>
-    </div>
-</section>
+    </article>
 
-<!-- 4. パスワード変更セクション（ユーザー設定含む） -->
-<section id="section-password-change" class="view-section">
     <!-- ユーザープロフィール設定 -->
-    <div class="user-profile-bar card">
-        <span style="font-weight: bold;">現在のユーザー設定:</span>
-        <span id="user-display" style="font-size: 1.2em;">👤 テストユーザー</span>
-        <input type="text" id="user-emoji-input" style="width: 50px; text-align: center; font-size: 1.2em;" value="👤">
-        <button class="btn" onclick="updateUserEmoji()">絵文字更新</button>
-    </div>
+    <article>
+        <h3>👤 ユーザープロフィール設定</h3>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span id="user-display" style="font-size: 1.1em; font-weight: bold;">👤 テストユーザー</span>
+            <input type="text" id="user-emoji-input" style="width: 60px; text-align: center; font-size: 1.2em; margin-bottom: 0;" value="👤">
+            <button style="width: auto; margin-bottom: 0;" onclick="updateUserEmoji()">絵文字更新</button>
+        </div>
+    </article>
 
-    <!-- ユーザー名・パスワード変更カード -->
-    <div class="card">
-        <h2>🔒 ユーザー名・パスワード変更</h2>
+    <!-- ユーザー名・パスワード変更 -->
+    <article>
+        <h3>🔒 ユーザー名・パスワード変更</h3>
         <form id="change-password-form" onsubmit="changePassword(event)">
-            <div class="form-group">
-                <label for="new-username">新しいユーザー名（変更する場合のみ入力）</label>
+            <label for="new-username">新しいユーザー名（変更する場合のみ入力）
                 <input type="text" id="new-username" placeholder="変更後のユーザー名">
-            </div>
-            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                <div class="form-group" style="flex: 1; min-width: 200px;">
-                    <label for="current-password">現在のパスワード</label>
+            </label>
+            <div class="grid">
+                <label for="current-password">現在のパスワード
                     <input type="password" id="current-password" required placeholder="現在のパスワード">
-                </div>
-                <div class="form-group" style="flex: 1; min-width: 200px;">
-                    <label for="new-password">新しいパスワード</label>
+                </label>
+                <label for="new-password">新しいパスワード
                     <input type="password" id="new-password" required placeholder="新しいパスワード">
-                </div>
+                </label>
             </div>
-            <button type="submit" class="btn">アカウント情報を変更</button>
+            <button type="submit">アカウント情報を変更</button>
         </form>
-    </div>
+    </article>
+
+    <!-- ログアウト -->
+    <article style="text-align: center;">
+        <a href="/logout" role="button" class="contrast outline" style="width: 100%;">🚪 ログアウト</a>
+    </article>
 </section>
+
+<!-- ボトムナビゲーションバー（画面下部固定） -->
+<nav class="bottom-nav">
+    <a href="#" id="nav-timeline" class="bottom-nav-item active" onclick="switchView('timeline', event)">
+        <span class="nav-icon">👥</span>
+        <span class="nav-label">タイムライン</span>
+    </a>
+    <a href="#" id="nav-task-check" class="bottom-nav-item" onclick="switchView('task-check', event)">
+        <span class="nav-icon">✅</span>
+        <span class="nav-label">タスクのチェック</span>
+    </a>
+    <a href="#" id="nav-settings" class="bottom-nav-item" onclick="switchView('settings', event)">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">設定</span>
+    </a>
+</nav>
 
 @section Scripts {
     <script>
@@ -220,24 +257,8 @@
         let currentUserName = '@Model.CurrentUser';
 
         /**
-         * ハンバーガーメニューの開閉を制御します。
-         * @@param {boolean} open メニューを開く場合はtrue、閉じる場合はfalse
-         */
-        function toggleMenu(open) {
-            const drawer = document.getElementById('nav-drawer');
-            const overlay = document.getElementById('nav-overlay');
-            if (open) {
-                drawer.classList.add('open');
-                overlay.classList.add('open');
-            } else {
-                drawer.classList.remove('open');
-                overlay.classList.remove('open');
-            }
-        }
-
-        /**
-         * ナビゲーション選択時に表示するセクションを切り替えます。
-         * @@param {string} viewName 表示対象の画面名 ('timeline', 'task-check', 'task-complete', 'password-change')
+         * ボトムナビゲーション選択時に表示するセクションを切り替えます。
+         * @@param {string} viewName 表示対象の画面名 ('timeline', 'task-check', 'settings')
          * @@param {Event} event イベントオブジェクト
          */
         function switchView(viewName, event) {
@@ -247,8 +268,8 @@
             const sections = document.querySelectorAll('.view-section');
             sections.forEach(s => s.classList.remove('active'));
 
-            // メニューリンクのactiveクラス解除
-            const navLinks = document.querySelectorAll('.nav-menu li a');
+            // ボトムナビリンクの active クラス解除
+            const navLinks = document.querySelectorAll('.bottom-nav-item');
             navLinks.forEach(l => l.classList.remove('active'));
 
             // 対象セクションおよびナビリンクをアクティブ化
@@ -259,7 +280,7 @@
             if (targetSection) targetSection.classList.add('active');
             if (targetLink) targetLink.classList.add('active');
 
-            // タイトル切り替え
+            // タイトルおよびデータ取得処理の切り替え
             switch (viewName) {
                 case 'timeline':
                     pageTitle.innerText = '習慣トラッカー - タイムライン';
@@ -269,17 +290,12 @@
                     pageTitle.innerText = '習慣トラッカー - タスクのチェック';
                     loadHabits();
                     break;
-                case 'task-complete':
-                    pageTitle.innerText = '習慣トラッカー - タスクの完備';
+                case 'settings':
+                    pageTitle.innerText = '習慣トラッカー - 設定';
                     loadGroups();
                     loadManageHabits();
                     break;
-                case 'password-change':
-                    pageTitle.innerText = '習慣トラッカー - パスワード変更';
-                    break;
             }
-
-            toggleMenu(false);
         }
 
         async function loadUser() {
@@ -353,11 +369,11 @@
                     <div style="flex: 1; min-width: 200px;">
                         <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
                         <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
-                        ${h.description ? `<p style="margin: 4px 0 0; color: #718096; font-size: 0.9em;">${escapeHtml(h.description)}</p>` : ''}
+                        ${h.description ? `<p style="margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;">${escapeHtml(h.description)}</p>` : ''}
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 280px; justify-content: flex-end;">
-                        <input type="text" id="habit-comment-${h.id}" placeholder="記録コメント（任意）" style="padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9em; flex: 1;">
-                        <button class="btn btn-success" onclick="executeHabit(${h.id})">✅ 実行</button>
+                        <input type="text" id="habit-comment-${h.id}" placeholder="記録コメント（任意）" style="margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;">
+                        <button style="margin-bottom: 0; width: auto;" onclick="executeHabit(${h.id})">✅ 実行</button>
                     </div>
                 </div>
             `).join('');
@@ -398,7 +414,7 @@
             if (!container) return;
 
             if (!habits || habits.length === 0) {
-                container.innerHTML = '<p style="color: #718096;">登録されている習慣がありません。</p>';
+                container.innerHTML = '<p style="opacity: 0.8;">登録されている習慣がありません。</p>';
                 return;
             }
 
@@ -407,35 +423,31 @@
                     <div style="flex: 1; min-width: 200px;">
                         <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
                         <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
-                        ${h.description ? `<p style="margin: 4px 0 0; color: #718096; font-size: 0.9em;">${escapeHtml(h.description)}</p>` : ''}
+                        ${h.description ? `<p style="margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;">${escapeHtml(h.description)}</p>` : ''}
                     </div>
                     <div style="display: flex; gap: 8px;">
-                        <button class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="toggleEditHabitForm(${h.id})">✏️ 編集</button>
-                        <button class="btn btn-danger" style="padding: 6px 12px; font-size: 0.85em;" onclick="deleteHabit(${h.id})">🗑️ 削除</button>
+                        <button class="secondary" style="padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="toggleEditHabitForm(${h.id})">✏️ 編集</button>
+                        <button class="contrast" style="padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="deleteHabit(${h.id})">🗑️ 削除</button>
                     </div>
-                    <div id="edit-habit-form-${h.id}" style="display: none; width: 100%; margin-top: 10px; background: #f7fafc; padding: 12px; border-radius: 6px;">
-                        <div class="form-group" style="margin-bottom: 8px;">
-                            <label style="font-size: 0.85em;">タイトル</label>
+                    <div id="edit-habit-form-${h.id}" style="display: none; width: 100%; margin-top: 10px; background: var(--pico-muted-border-color, #1e293b); padding: 12px; border-radius: 6px;">
+                        <label style="font-size: 0.85em;">タイトル
                             <input type="text" id="edit-title-${h.id}" value="${escapeHtml(h.title)}" style="padding: 6px;">
-                        </div>
-                        <div class="form-group" style="margin-bottom: 8px;">
-                            <label style="font-size: 0.85em;">絵文字</label>
+                        </label>
+                        <label style="font-size: 0.85em;">絵文字
                             <input type="text" id="edit-emoji-${h.id}" value="${escapeHtml(h.emoji || '📝')}" style="padding: 6px;">
-                        </div>
-                        <div class="form-group" style="margin-bottom: 8px;">
-                            <label style="font-size: 0.85em;">詳細メモ</label>
+                        </label>
+                        <label style="font-size: 0.85em;">詳細メモ
                             <input type="text" id="edit-description-${h.id}" value="${escapeHtml(h.description || '')}" style="padding: 6px;">
-                        </div>
-                        <div class="form-group" style="margin-bottom: 8px;">
-                            <label style="font-size: 0.85em;">頻度</label>
+                        </label>
+                        <label style="font-size: 0.85em;">頻度
                             <select id="edit-frequency-${h.id}" style="padding: 6px;">
                                 <option value="Daily" ${h.frequency === 'Daily' ? 'selected' : ''}>毎日</option>
                                 <option value="Weekly" ${h.frequency === 'Weekly' ? 'selected' : ''}>毎週</option>
                             </select>
-                        </div>
+                        </label>
                         <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                            <button class="btn btn-success" style="padding: 6px 12px; font-size: 0.85em;" onclick="updateHabit(${h.id})">保存</button>
-                            <button class="btn" style="padding: 6px 12px; font-size: 0.85em; background: #cbd5e0;" onclick="toggleEditHabitForm(${h.id})">キャンセル</button>
+                            <button style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="updateHabit(${h.id})">保存</button>
+                            <button class="secondary" style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="toggleEditHabitForm(${h.id})">キャンセル</button>
                         </div>
                     </div>
                 </div>
@@ -533,17 +545,17 @@
             filterSelect.innerHTML = '<option value="all">すべての投稿</option>';
 
             if (!userGroups || userGroups.length === 0) {
-                container.innerHTML = '<p style="color: #718096;">所属しているグループはありません。</p>';
+                container.innerHTML = '<p style="opacity: 0.8;">所属しているグループはありません。</p>';
                 return;
             }
 
             container.innerHTML = userGroups.map(g => `
-                <div style="background: #f7fafc; padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; background: var(--pico-muted-border-color, #1e293b);">
                     <div>
                         <strong>🏢 ${escapeHtml(g.name)}</strong>
                     </div>
                     <div>
-                        <span style="font-size: 0.85em; background: #e2e8f0; padding: 4px 8px; border-radius: 4px; color: #4a5568;">
+                        <span style="font-size: 0.85em; padding: 4px 8px; border-radius: 4px; background: var(--pico-card-background-color, #18232c);">
                             招待コード: <strong>${escapeHtml(g.inviteCode)}</strong>
                         </span>
                     </div>
@@ -622,31 +634,31 @@
 
             container.innerHTML = items.map(item => `
                 <div class="timeline-item">
-                    <div class="timeline-header">
-                        <div class="user-info">
-                            <span class="user-emoji">${escapeHtml(item.userEmoji || '👤')}</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px; font-weight: bold;">
+                            <span style="font-size: 1.4em;">${escapeHtml(item.userEmoji || '👤')}</span>
                             <span>${escapeHtml(item.userName)}</span>
                         </div>
-                        <small style="color: #718096;">${new Date(item.executedAt).toLocaleString('ja-JP')}</small>
+                        <small style="opacity: 0.7;">${new Date(item.executedAt).toLocaleString('ja-JP')}</small>
                     </div>
-                    <div class="habit-title">
-                        <span class="task-emoji">${escapeHtml(item.habitEmoji || '📝')}</span>
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 1.1em; font-weight: bold; margin-bottom: 6px;">
+                        <span style="font-size: 1.3em;">${escapeHtml(item.habitEmoji || '📝')}</span>
                         <span>${escapeHtml(item.habitTitle)}</span>
                     </div>
-                    ${item.comment ? `<p style="margin: 4px 0 8px; color: #4a5568;">コメント: ${escapeHtml(item.comment)}</p>` : ''}
+                    ${item.comment ? `<p style="margin: 4px 0 8px; opacity: 0.9;">コメント: ${escapeHtml(item.comment)}</p>` : ''}
 
                     <div class="reaction-bar">
                         ${(item.reactions || []).map(r => `
                             <span class="reaction-badge" title="タップしてリアクションを切り替え" onclick="toggleReaction(${item.logId}, '${escapeHtml(r.emoji)}')">${escapeHtml(r.emoji)} ${r.count}</span>
                         `).join('')}
-                        <span style="color: #cbd5e0;">|</span>
+                        <span style="opacity: 0.4;">|</span>
                         ${quickEmojis.map(emoji => `
-                            <button class="btn-reaction" onclick="toggleReaction(${item.logId}, '${emoji}')">${emoji}</button>
+                            <button class="secondary outline" style="padding: 2px 8px; margin-bottom: 0; width: auto; font-size: 0.9em;" onclick="toggleReaction(${item.logId}, '${emoji}')">${emoji}</button>
                         `).join('')}
                     </div>
 
                     <!-- コメントセクション -->
-                    <div class="comments-section">
+                    <div style="margin-top: 12px; border-top: 1px dashed var(--pico-muted-border-color, #2d3843); padding-top: 10px; font-size: 0.9em;">
                         <div id="comments-list-${item.logId}">
                             ${(item.comments || []).map(c => `
                                 <div class="comment-item">
@@ -654,15 +666,15 @@
                                         <span>${escapeHtml(c.userEmoji)} <strong>${escapeHtml(c.userName)}</strong>: ${escapeHtml(c.commentText)}</span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 6px;">
-                                        <small style="color: #a0aec0;">${new Date(c.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</small>
-                                        ${c.userId === currentUserId ? `<button style="background: none; border: none; color: #e53e3e; cursor: pointer; font-size: 0.8em;" onclick="deleteComment(${c.id})">❌</button>` : ''}
+                                        <small style="opacity: 0.6;">${new Date(c.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</small>
+                                        ${c.userId === currentUserId ? `<button style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8em; padding: 0; margin-bottom: 0; width: auto;" onclick="deleteComment(${c.id})">❌</button>` : ''}
                                     </div>
                                 </div>
                             `).join('')}
                         </div>
-                        <form class="comment-form" onsubmit="postComment(event, ${item.logId})">
-                            <input type="text" id="comment-input-${item.logId}" class="comment-input" placeholder="応援コメントを入力..." required>
-                            <button type="submit" class="btn" style="padding: 6px 12px; font-size: 0.85em;">送信</button>
+                        <form style="display: flex; gap: 6px; margin-top: 8px; margin-bottom: 0;" onsubmit="postComment(event, ${item.logId})">
+                            <input type="text" id="comment-input-${item.logId}" placeholder="応援コメントを入力..." required style="margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;">
+                            <button type="submit" style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;">送信</button>
                         </form>
                     </div>
                 </div>

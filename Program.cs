@@ -291,7 +291,7 @@ app.MapGet("/logout", async (HttpContext context) =>
 
 /// <summary>
 /// ダッシュボード / メイン画面 UI エンドポイント
-/// ハンバーガーメニューにより「タイムライン」「タスクのチェック」「タスクの完備」「パスワード変更」の4画面を独立表示します。
+/// ボトムナビゲーションにより「タイムライン」「タスクのチェック」「設定（タスク/パスワード）」の3画面を切り替えて表示します。
 /// デフォルトの表示画面は「タイムライン」です。
 /// </summary>
 app.MapGet("/", async (HttpContext context, IViewRenderService viewRenderService) =>
