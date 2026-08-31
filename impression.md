@@ -3,7 +3,7 @@
 ## 📂 プロジェクトのフォルダ構成
 必要なファイルは 実質3つだけ の極小構成です。
 
-📁 MyHonoApp/
+📁 MyHonoApp/  
  ├── 📄 MyHonoApp.csproj       (プロジェクト設定：Native AOTとライブラリ)  
  ├── 📄 Program.cs               (C#：起動・APIルーティング・DB処理)  
  ├── 📄 TimelineItemsView.razor  (HonoのJSX風：タイムラインのHTML部品)  
@@ -12,7 +12,7 @@
 ------------------------------
 ## 1. 📄 MyHonoApp.csproj
 .NET 9/10の最新機能「Native AOT」を有効化し、超高速・低メモリで動かします。
-'''
+```
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -26,11 +26,11 @@
     <PackageReference Include="Dapper" Version="2.1.35" />
   </ItemGroup>
 </Project>
-'''
+```
 ------------------------------
 ## 2. 📄 Program.cs
 ベースとなる親画面の配信、無限スクロール用のAPI、新規投稿API、そしてSQLiteの初期化処理を1ファイルにまとめます。
-'''
+```
 using Microsoft.Data.Sqlite;using Dapper;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents(); // .razorコンポーネントを有効化
@@ -114,11 +114,11 @@ app.MapPost("/submit", async (HttpContext context) =>
 });
 // Cloud Run用ポート設定var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
 app.Run($"http://0.0.0:{port}");
-'''
+```
 ------------------------------
 ## 3. 📄 TimelineItemsView.razor
 HonoのJSXのように、データを受け取ってタイムラインのカードを生成します。最後の1枚にだけ、画面に入った瞬間（revealed）に次のページを取得するhtmx属性を付与します。
-'''
+```
 @code {
     [Parameter] public IEnumerable<TimelineItem> Items { get; set; } = Array.Empty<TimelineItem>();
     [Parameter] public int NextPage { get; set; }
@@ -156,7 +156,7 @@ HonoのJSXのように、データを受け取ってタイムラインのカー�
         </article>
     }
 }
-'''
+```
 ------------------------------
 ## 4. 📄 Dockerfile
 Native AOT ＋ Alpine Linux を採用し、コンテナイメージを50MB以下、コールドスタートをコンマ数秒にまで最適化します。
@@ -178,7 +178,7 @@ Cloud Run用環境変数ENV ASPNETCORE_URLS=http://+:8080ENTRYPOINT ["./MyHonoAp
 # 1. データを永続化するためのGCSバケットを作成（すでに存在する場合は不要）
 gcloud storage buckets create gs://my-timeline-db-bucket --location=asia-northeast1
 # 2. Cloud Run へビルド＆デプロイ
-'''
+```
 gcloud run deploy my-timeline-app \
     --source=. \
     --region=asia-northeast1 \
@@ -189,7 +189,7 @@ gcloud run deploy my-timeline-app \
     --add-volume=name=db-volume,type=cloud-storage,bucket=my-timeline-db-bucket \
     --add-volume-mount=volume=db-volume,mount-path=/app/data \
     --set-env-vars=DB_DIR=/app/data
-'''
+```
 ------------------------------
 ## ✨ この仕様で得られるメリットのまとめ
 
