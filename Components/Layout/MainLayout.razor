@@ -1,22 +1,22 @@
 @*
-    モジュール名: Views/Shared/_Layout.cshtml
-    説明: アプリケーション全体の共通レイアウトを提供するRazorビューです。Pico.css (classless CDN + darkmode) を適用しています。
+    モジュール名: Components/Layout/MainLayout.razor
+    説明: アプリケーション全体の共通レイアウトを提供する Razor Component です。Pico.css (classless CDN + darkmode) および htmx を適用しています。
 *@
+@inherits LayoutComponentBase
+
 <!DOCTYPE html>
 <html lang="ja" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>@ViewData["Title"] - HabitTracker</title>
+    <title>HabitTracker</title>
     <!-- Pico.css classless CDN (Dark mode enabled via data-theme="dark") -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@@picocss/pico@2/css/pico.classless.min.css">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    @RenderSection("Styles", required: false)
 </head>
 <body>
     <main class="container">
-        @RenderBody()
+        @Body
     </main>
-    @RenderSection("Scripts", required: false)
 </body>
 </html>

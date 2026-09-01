@@ -7,16 +7,12 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
-using Microsoft.AspNetCore.Mvc.Razor;
-using Microsoft.AspNetCore.Mvc.Rendering;
-using Microsoft.AspNetCore.Mvc.ViewFeatures;
-using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.Sqlite;
 using Dapper;
+using HabitTracker.Components.Pages;
 
 /// <summary>
 /// アプリケーションのエントリポイントおよび初期設定を提供するメインクラスです。
@@ -34,10 +30,9 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 // 認可サービスの設定
 builder.Services.AddAuthorization();
 
-// Razor ビュー関連サービスおよび HttpContextAccessor の登録
-builder.Services.AddControllersWithViews();
+// Razor Components (Razor Component SSR) 関連サービスの登録
+builder.Services.AddRazorComponents();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<IViewRenderService, ViewRenderService>();
 
 var app = builder.Build();
 
@@ -199,17 +194,15 @@ void InitializeDatabase(string connStr)
 
 /// <summary>
 /// ログイン画面 UI エンドポイント（GET）
+/// Razor Component (Login.razor) を使って描画します。
 /// </summary>
-app.MapGet("/login", async (HttpContext context, IViewRenderService viewRenderService) =>
+app.MapGet("/login", (HttpContext context) =>
 {
     string? errorMessage = context.Request.Query["error"].ToString();
-    var viewModel = new LoginViewModel
+    return new RazorComponentResult<Login>(new
     {
         ErrorMessage = string.IsNullOrEmpty(errorMessage) ? null : errorMessage
-    };
-
-    string html = await viewRenderService.RenderToStringAsync("~/Views/Login.cshtml", viewModel);
-    return Results.Content(html, "text/html; charset=utf-8");
+    });
 }).AllowAnonymous();
 
 /// <summary>
@@ -291,19 +284,17 @@ app.MapGet("/logout", async (HttpContext context) =>
 
 /// <summary>
 /// ダッシュボード / メイン画面 UI エンドポイント
+/// Razor Component (Index.razor) を使って描画します。
 /// ボトムナビゲーションにより「タイムライン」「タスクのチェック」「設定（タスク/パスワード）」の3画面を切り替えて表示します。
 /// デフォルトの表示画面は「タイムライン」です。
 /// </summary>
-app.MapGet("/", async (HttpContext context, IViewRenderService viewRenderService) =>
+app.MapGet("/", (HttpContext context) =>
 {
     string currentUser = context.User.Identity?.Name ?? "不明";
-    var viewModel = new DashboardViewModel
+    return new RazorComponentResult<HabitTracker.Components.Pages.Index>(new
     {
         CurrentUser = currentUser
-    };
-
-    string html = await viewRenderService.RenderToStringAsync("~/Views/Index.cshtml", viewModel);
-    return Results.Content(html, "text/html; charset=utf-8");
+    });
 }).RequireAuthorization();
 
 /// <summary>
@@ -1168,109 +1159,6 @@ app.MapDelete("/api/comments/{commentId:int}", (int commentId) =>
 var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
 app.Run($"http://0.0.0.0:{port}");
 
-// ------------------------------------------------------------
-// Razor ビューレンダリング用 サービス・モデル定義
-// ------------------------------------------------------------
-
-/// <summary>
-/// Razor ビューを文字列 (HTML) へレンダリングするためのサービスインターフェースです。
-/// </summary>
-public interface IViewRenderService
-{
-    /// <summary>
-    /// 指定された Razor ビュー名およびモデルを用いて HTML 文字列をレンダリングします。
-    /// </summary>
-    /// <typeparam name="TModel">ビューモデルの型</typeparam>
-    /// <param name="viewName">ビューのパスまたは名称</param>
-    /// <param name="model">ビューに渡すモデルデータ</param>
-    /// <returns>レンダリングされた HTML 文字列</returns>
-    Task<string> RenderToStringAsync<TModel>(string viewName, TModel model);
-}
-
-/// <summary>
-/// <see cref="IViewRenderService"/> の実装クラスです。
-/// ASP.NET Core の <see cref="IRazorViewEngine"/> を利用して Razor テンプレートを描画します。
-/// </summary>
-public class ViewRenderService : IViewRenderService
-{
-    private readonly IRazorViewEngine _razorViewEngine;
-    private readonly ITempDataProvider _tempDataProvider;
-    private readonly IServiceProvider _serviceProvider;
-    private readonly IHttpContextAccessor _httpContextAccessor;
-
-    public ViewRenderService(
-        IRazorViewEngine razorViewEngine,
-        ITempDataProvider tempDataProvider,
-        IServiceProvider serviceProvider,
-        IHttpContextAccessor httpContextAccessor)
-    {
-        _razorViewEngine = razorViewEngine;
-        _tempDataProvider = tempDataProvider;
-        _serviceProvider = serviceProvider;
-        _httpContextAccessor = httpContextAccessor;
-    }
-
-    public async Task<string> RenderToStringAsync<TModel>(string viewName, TModel model)
-    {
-        var httpContext = _httpContextAccessor.HttpContext ?? new DefaultHttpContext { RequestServices = _serviceProvider };
-        var actionContext = new ActionContext(
-            httpContext,
-            httpContext.GetRouteData() ?? new RouteData(),
-            new Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor());
-
-        using var sw = new StringWriter();
-        var viewResult = _razorViewEngine.GetView(executingFilePath: null, viewPath: viewName, isMainPage: true);
-
-        if (!viewResult.Success)
-        {
-            viewResult = _razorViewEngine.FindView(actionContext, viewName, isMainPage: true);
-        }
-
-        if (viewResult.View == null)
-        {
-            throw new ArgumentNullException($"{viewName} に該当するビューが見つかりませんでした。");
-        }
-
-        var viewDictionary = new ViewDataDictionary<TModel>(new EmptyModelMetadataProvider(), new ModelStateDictionary())
-        {
-            Model = model
-        };
-
-        var viewContext = new ViewContext(
-            actionContext,
-            viewResult.View,
-            viewDictionary,
-            new TempDataDictionary(actionContext.HttpContext, _tempDataProvider),
-            sw,
-            new HtmlHelperOptions()
-        );
-
-        await viewResult.View.RenderAsync(viewContext);
-        return sw.ToString();
-    }
-}
-
-/// <summary>
-/// ログイン画面に渡すビューモデルクラスです。
-/// </summary>
-public class LoginViewModel
-{
-    /// <summary>
-    /// エラーメッセージ（任意）
-    /// </summary>
-    public string? ErrorMessage { get; set; }
-}
-
-/// <summary>
-/// メインダッシュボード画面に渡すビューモデルクラスです。
-/// </summary>
-public class DashboardViewModel
-{
-    /// <summary>
-    /// 現在ログイン中のユーザー名
-    /// </summary>
-    public string CurrentUser { get; set; } = string.Empty;
-}
 
 // ------------------------------------------------------------
 // データモデルおよび DTO クラスの定義
