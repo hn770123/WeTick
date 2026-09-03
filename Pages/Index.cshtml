@@ -1,9 +1,14 @@
+@page "/"
+@model HabitTracker.Pages.IndexModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "ダッシュボード";
+}
+
 @*
-    モジュール名: Components/Pages/Index.razor
-    説明: HabitTracker のメインダッシュボード画面 Razor Component（htmx統合・ボトムナビゲーション・Pico.css対応）です。
+    モジュール名: Pages/Index.cshtml
+    説明: HabitTracker のメインダッシュボード画面 Razor Page（htmx統合・ボトムナビゲーション・Pico.css対応）です。
 *@
-@using Microsoft.AspNetCore.Components
-@layout Components.Layout.MainLayout
 
 <style>
     /* ボトムナビゲーション固定表示のための画面余白 */
@@ -112,7 +117,7 @@
 <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
     <h2 style="margin: 0; font-size: 1.4rem;" id="page-title">習慣トラッカー - タイムライン</h2>
     <div>
-        <small style="font-weight: bold;">ログイン中: @CurrentUser</small>
+        <small style="font-weight: bold;">ログイン中: @Model.CurrentUser</small>
     </div>
 </header>
 
@@ -248,7 +253,7 @@
 <script>
     let currentUserId = 1;
     let currentUserEmoji = '👤';
-    let currentUserName = '@CurrentUser';
+    let currentUserName = '@Model.CurrentUser';
 
     /**
      * ボトムナビゲーション選択時に表示するセクションを切り替えます。
@@ -298,7 +303,7 @@
             const u = await res.json();
             currentUserId = u.id;
             currentUserEmoji = u.emoji || '👤';
-            currentUserName = u.name || '@CurrentUser';
+            currentUserName = u.name || '@Model.CurrentUser';
             document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
             document.getElementById('user-emoji-input').value = currentUserEmoji;
         }
@@ -733,11 +738,3 @@
     loadGroups();
     loadTimeline();
 </script>
-
-@code {
-    /// <summary>
-    /// 現在ログイン中のユーザー名
-    /// </summary>
-    [Parameter]
-    public string CurrentUser { get; set; } = string.Empty;
-}
