@@ -1,0 +1,31 @@
+@page "/login"
+@model HabitTracker.Pages.LoginModel
+@attribute [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "ログイン";
+}
+
+@*
+    モジュール名: Pages/Login.cshtml
+    説明: HabitTracker のログイン画面 (Pico.css対応 Razor Pages) です。
+*@
+
+<div style="max-width: 400px; margin: 50px auto 0 auto;">
+    <article>
+        <h2 style="text-align: center;">🔑 ログイン</h2>
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <p style="color: var(--pico-del-color, #ef4444); margin-bottom: 15px;"><small>@Model.ErrorMessage</small></p>
+        }
+        <form method="post">
+            <label for="username">ユーザー名
+                <input type="text" id="username" name="Username" required autofocus placeholder="admin" value="@Model.Username">
+            </label>
+            <label for="password">パスワード
+                <input type="password" id="password" name="Password" required placeholder="secret-password">
+            </label>
+            <button type="submit">ログイン</button>
+        </form>
+    </article>
+</div>

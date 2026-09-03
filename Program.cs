@@ -7,12 +7,11 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.Sqlite;
 using Dapper;
-using HabitTracker.Components.Pages;
+using HabitTracker;
 
 /// <summary>
 /// アプリケーションのエントリポイントおよび初期設定を提供するメインクラスです。
@@ -30,8 +29,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 // 認可サービスの設定
 builder.Services.AddAuthorization();
 
-// Razor Components (Razor Component SSR) 関連サービスの登録
-builder.Services.AddRazorComponents();
+// Razor Pages 関連サービスの登録
+builder.Services.AddRazorPages();
 builder.Services.AddHttpContextAccessor();
 
 var app = builder.Build();
@@ -40,6 +39,9 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseStaticFiles();
+
+// Razor Pages ルーティングのマッピング
+app.MapRazorPages();
 
 // SQLite データベースの格納ディレクトリを取得または設定
 string dbDir = Environment.GetEnvironmentVariable("DB_DIR") ?? "./data";
@@ -189,89 +191,8 @@ void InitializeDatabase(string connStr)
 }
 
 // ------------------------------------------------------------
-// ルーティング定義 (Hono風 Minimal API)
+// ルーティング定義
 // ------------------------------------------------------------
-
-/// <summary>
-/// ログイン画面 UI エンドポイント（GET）
-/// Razor Component (Login.razor) を使って描画します。
-/// </summary>
-app.MapGet("/login", (HttpContext context) =>
-{
-    string? errorMessage = context.Request.Query["error"].ToString();
-    return new RazorComponentResult<Login>(new
-    {
-        ErrorMessage = string.IsNullOrEmpty(errorMessage) ? null : errorMessage
-    });
-}).AllowAnonymous();
-
-/// <summary>
-/// ログイン処理 エンドポイント（POST）
-/// ユーザーが存在しない場合は自動で新規登録を行い、既存ユーザーの場合はパスワード検証を行います。
-/// </summary>
-app.MapPost("/login", async (HttpContext context) =>
-{
-    var form = await context.Request.ReadFormAsync();
-    string username = form["Username"].ToString();
-    string password = form["Password"].ToString();
-
-    if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-    {
-        return Results.Redirect("/login?error=" + Uri.EscapeDataString("ユーザー名とパスワードを入力してください。"));
-    }
-
-    using var connection = new SqliteConnection(connectionString);
-    var existingUser = connection.QuerySingleOrDefault<User>(
-        "SELECT Id, Name, Email, Emoji, Password, CreatedAt FROM Users WHERE Name = @Name",
-        new { Name = username });
-
-    if (existingUser is null)
-    {
-        // ユーザーが存在しない場合は新規自動登録を行う
-        string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-        string email = $"{username.ToLower()}@example.com";
-        string insertSql = @"
-            INSERT INTO Users (Name, Email, Emoji, Password, CreatedAt)
-            VALUES (@Name, @Email, '👤', @Password, @CreatedAt);
-            SELECT last_insert_rowid();";
-
-        int newUserId = connection.ExecuteScalar<int>(insertSql, new
-        {
-            Name = username,
-            Email = email,
-            Password = password,
-            CreatedAt = createdAt
-        });
-
-        var newClaims = new List<Claim>
-        {
-            new Claim(ClaimTypes.Name, username),
-            new Claim(ClaimTypes.NameIdentifier, newUserId.ToString())
-        };
-
-        var newIdentity = new ClaimsIdentity(newClaims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(newIdentity));
-
-        return Results.Redirect("/");
-    }
-
-    // 既存ユーザーの場合はパスワードをチェック
-    if (existingUser.Password == password)
-    {
-        var claims = new List<Claim>
-        {
-            new Claim(ClaimTypes.Name, existingUser.Name),
-            new Claim(ClaimTypes.NameIdentifier, existingUser.Id.ToString())
-        };
-
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
-
-        return Results.Redirect("/");
-    }
-
-    return Results.Redirect("/login?error=" + Uri.EscapeDataString("ユーザー名またはパスワードが違います。"));
-}).AllowAnonymous();
 
 /// <summary>
 /// ログアウト処理 エンドポイント（GET）
@@ -281,21 +202,6 @@ app.MapGet("/logout", async (HttpContext context) =>
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 });
-
-/// <summary>
-/// ダッシュボード / メイン画面 UI エンドポイント
-/// Razor Component (Index.razor) を使って描画します。
-/// ボトムナビゲーションにより「タイムライン」「タスクのチェック」「設定（タスク/パスワード）」の3画面を切り替えて表示します。
-/// デフォルトの表示画面は「タイムライン」です。
-/// </summary>
-app.MapGet("/", (HttpContext context) =>
-{
-    string currentUser = context.User.Identity?.Name ?? "不明";
-    return new RazorComponentResult<HabitTracker.Components.Pages.Index>(new
-    {
-        CurrentUser = currentUser
-    });
-}).RequireAuthorization();
 
 /// <summary>
 /// データベース状態確認用エンドポイント
@@ -1164,175 +1070,178 @@ app.Run($"http://0.0.0.0:{port}");
 // データモデルおよび DTO クラスの定義
 // ------------------------------------------------------------
 
-/// <summary>
-/// ユーザー情報を表すエンティティクラスです。
-/// </summary>
-public class User
+namespace HabitTracker
 {
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string Emoji { get; set; } = "👤";
-    public string? Password { get; set; }
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// ユーザー情報を表すエンティティクラスです。
+    /// </summary>
+    public class User
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Emoji { get; set; } = "👤";
+        public string? Password { get; set; }
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// 習慣（タスク）情報を表すエンティティクラスです。
-/// </summary>
-public class Habit
-{
-    public int Id { get; set; }
-    public int UserId { get; set; }
-    public string Title { get; set; } = string.Empty;
-    public string? Description { get; set; }
-    public string Emoji { get; set; } = "📝";
-    public string Frequency { get; set; } = string.Empty;
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// 習慣（タスク）情報を表すエンティティクラスです。
+    /// </summary>
+    public class Habit
+    {
+        public int Id { get; set; }
+        public int UserId { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string Emoji { get; set; } = "📝";
+        public string Frequency { get; set; } = string.Empty;
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// 習慣の実行記録（ログ）を表すエンティティクラスです。
-/// </summary>
-public class ExecutionLog
-{
-    public int Id { get; set; }
-    public int HabitId { get; set; }
-    public int UserId { get; set; }
-    public string ExecutedAt { get; set; } = string.Empty;
-    public string? Comment { get; set; }
-}
+    /// <summary>
+    /// 習慣の実行記録（ログ）を表すエンティティクラスです。
+    /// </summary>
+    public class ExecutionLog
+    {
+        public int Id { get; set; }
+        public int HabitId { get; set; }
+        public int UserId { get; set; }
+        public string ExecutedAt { get; set; } = string.Empty;
+        public string? Comment { get; set; }
+    }
 
-/// <summary>
-/// いいね・リアクション情報を表すエンティティクラスです。
-/// </summary>
-public class Like
-{
-    public int Id { get; set; }
-    public int ExecutionLogId { get; set; }
-    public int UserId { get; set; }
-    public string ReactionType { get; set; } = "👍";
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// いいね・リアクション情報を表すエンティティクラスです。
+    /// </summary>
+    public class Like
+    {
+        public int Id { get; set; }
+        public int ExecutionLogId { get; set; }
+        public int UserId { get; set; }
+        public string ReactionType { get; set; } = "👍";
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// タイムラインで表示するアイテムを表す DTO クラスです。
-/// </summary>
-public class TimelineItemDto
-{
-    public int LogId { get; set; }
-    public int HabitId { get; set; }
-    public string HabitTitle { get; set; } = string.Empty;
-    public string HabitEmoji { get; set; } = "📝";
-    public int UserId { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string UserEmoji { get; set; } = "👤";
-    public string ExecutedAt { get; set; } = string.Empty;
-    public string? Comment { get; set; }
-    public List<ReactionSummaryDto> Reactions { get; set; } = new();
-    public List<CommentDto> Comments { get; set; } = new();
-}
+    /// <summary>
+    /// タイムラインで表示するアイテムを表す DTO クラスです。
+    /// </summary>
+    public class TimelineItemDto
+    {
+        public int LogId { get; set; }
+        public int HabitId { get; set; }
+        public string HabitTitle { get; set; } = string.Empty;
+        public string HabitEmoji { get; set; } = "📝";
+        public int UserId { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string UserEmoji { get; set; } = "👤";
+        public string ExecutedAt { get; set; } = string.Empty;
+        public string? Comment { get; set; }
+        public List<ReactionSummaryDto> Reactions { get; set; } = new();
+        public List<CommentDto> Comments { get; set; } = new();
+    }
 
-/// <summary>
-/// タイムライン投稿のコメント情報を表す DTO クラスです。
-/// </summary>
-public class CommentDto
-{
-    public int Id { get; set; }
-    public int ExecutionLogId { get; set; }
-    public int UserId { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string UserEmoji { get; set; } = "👤";
-    public string CommentText { get; set; } = string.Empty;
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// タイムライン投稿のコメント情報を表す DTO クラスです。
+    /// </summary>
+    public class CommentDto
+    {
+        public int Id { get; set; }
+        public int ExecutionLogId { get; set; }
+        public int UserId { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string UserEmoji { get; set; } = "👤";
+        public string CommentText { get; set; } = string.Empty;
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// コメントを追加するための DTO リクエストモデルです。
-/// </summary>
-public record AddCommentDto(int UserId, string CommentText);
+    /// <summary>
+    /// コメントを追加するための DTO リクエストモデルです。
+    /// </summary>
+    public record AddCommentDto(int UserId, string CommentText);
 
-/// <summary>
-/// リアクションの集計情報を表す DTO クラスです。
-/// </summary>
-public class ReactionSummaryDto
-{
-    public string Emoji { get; set; } = string.Empty;
-    public int Count { get; set; }
-}
+    /// <summary>
+    /// リアクションの集計情報を表す DTO クラスです。
+    /// </summary>
+    public class ReactionSummaryDto
+    {
+        public string Emoji { get; set; } = string.Empty;
+        public int Count { get; set; }
+    }
 
-/// <summary>
-/// リアクションの詳細情報を表す DTO クラスです。
-/// </summary>
-public class ReactionDetailDto
-{
-    public int Id { get; set; }
-    public int ExecutionLogId { get; set; }
-    public int UserId { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string UserEmoji { get; set; } = "👤";
-    public string ReactionType { get; set; } = "👍";
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// リアクションの詳細情報を表す DTO クラスです。
+    /// </summary>
+    public class ReactionDetailDto
+    {
+        public int Id { get; set; }
+        public int ExecutionLogId { get; set; }
+        public int UserId { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string UserEmoji { get; set; } = "👤";
+        public string ReactionType { get; set; } = "👍";
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// 習慣を新規作成するための DTO リクエストモデルです。
-/// </summary>
-public record CreateHabitDto(int UserId, string Title, string? Description, string? Emoji, string Frequency);
+    /// <summary>
+    /// 習慣を新規作成するための DTO リクエストモデルです。
+    /// </summary>
+    public record CreateHabitDto(int UserId, string Title, string? Description, string? Emoji, string Frequency);
 
-/// <summary>
-/// 習慣情報を更新するための DTO リクエストモデルです。
-/// </summary>
-public record UpdateHabitDto(string Title, string? Description, string? Emoji, string Frequency);
+    /// <summary>
+    /// 習慣情報を更新するための DTO リクエストモデルです。
+    /// </summary>
+    public record UpdateHabitDto(string Title, string? Description, string? Emoji, string Frequency);
 
-/// <summary>
-/// ワンタップで習慣を実行記録するための DTO リクエストモデルです。
-/// </summary>
-public record ExecuteHabitDto(int UserId, string? Comment);
+    /// <summary>
+    /// ワンタップで習慣を実行記録するための DTO リクエストモデルです。
+    /// </summary>
+    public record ExecuteHabitDto(int UserId, string? Comment);
 
-/// <summary>
-/// ユーザー情報を更新するための DTO リクエストモデルです。
-/// </summary>
-public record UpdateUserDto(string Name, string? Emoji);
+    /// <summary>
+    /// ユーザー情報を更新するための DTO リクエストモデルです。
+    /// </summary>
+    public record UpdateUserDto(string Name, string? Emoji);
 
-/// <summary>
-/// ユーザー名およびパスワード変更用の DTO リクエストモデルです。
-/// </summary>
-public record ChangePasswordDto(string CurrentPassword, string NewPassword, string? NewUsername);
+    /// <summary>
+    /// ユーザー名およびパスワード変更用の DTO リクエストモデルです。
+    /// </summary>
+    public record ChangePasswordDto(string CurrentPassword, string NewPassword, string? NewUsername);
 
-/// <summary>
-/// リアクションを追加するための DTO リクエストモデルです。
-/// </summary>
-public record AddReactionDto(int UserId, string ReactionType);
+    /// <summary>
+    /// リアクションを追加するための DTO リクエストモデルです。
+    /// </summary>
+    public record AddReactionDto(int UserId, string ReactionType);
 
-/// <summary>
-/// グループ新規作成用の DTO リクエストモデルです。
-/// </summary>
-public record CreateGroupDto(int UserId, string Name);
+    /// <summary>
+    /// グループ新規作成用の DTO リクエストモデルです。
+    /// </summary>
+    public record CreateGroupDto(int UserId, string Name);
 
-/// <summary>
-/// 招待コードによるグループ参加用の DTO リクエストモデルです。
-/// </summary>
-public record JoinGroupDto(int UserId, string InviteCode);
+    /// <summary>
+    /// 招待コードによるグループ参加用の DTO リクエストモデルです。
+    /// </summary>
+    public record JoinGroupDto(int UserId, string InviteCode);
 
-/// <summary>
-/// グループ情報を表す DTO クラスです。
-/// </summary>
-public class GroupDto
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string InviteCode { get; set; } = string.Empty;
-    public string CreatedAt { get; set; } = string.Empty;
-}
+    /// <summary>
+    /// グループ情報を表す DTO クラスです。
+    /// </summary>
+    public class GroupDto
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string InviteCode { get; set; } = string.Empty;
+        public string CreatedAt { get; set; } = string.Empty;
+    }
 
-/// <summary>
-/// グループメンバー情報を表す DTO クラスです。
-/// </summary>
-public class GroupMemberDto
-{
-    public int UserId { get; set; }
-    public string UserName { get; set; } = string.Empty;
-    public string UserEmoji { get; set; } = "👤";
-    public string Role { get; set; } = "Member";
+    /// <summary>
+    /// グループメンバー情報を表す DTO クラスです。
+    /// </summary>
+    public class GroupMemberDto
+    {
+        public int UserId { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string UserEmoji { get; set; } = "👤";
+        public string Role { get; set; } = "Member";
+    }
 }
