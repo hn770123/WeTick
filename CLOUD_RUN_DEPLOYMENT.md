@@ -1,54 +1,44 @@
 # Cloud Run デプロイ手順書 (2026年版)
 
-本書は、.NET 10 アプリケーションを **Native AOT ＋ Alpine Linux** 環境でビルドし、起動時間（Cold Start）を極限まで短縮した状態で **Google Cloud Run** へデプロイするための手順書です。
+本書は、.NET 10 アプリケーションを JIT コンパイル (ASP.NET Core ランタイム) ＋ Alpine Linux 環境でビルドし、**Google Cloud Run** へデプロイするための手順書です。
 
 ---
 
 ## 1. 概要と構成要素
 
 - **アプリケーション構成**: .NET 10 Minimal API + SQLite
-- **コンテナビルド**: Native AOT コンパイル ＋ Alpine Linux (マルチステージビルド)
+- **コンテナビルド**: JIT コンパイル ＋ Alpine Linux (マルチステージビルド)
 - **デプロイ先**: Google Cloud Run
 - **データベース永続化**: Google Cloud Storage (GCS) ボリュームマウント (`/app/data`)
 - **インスタンス制限**: `max-instances=1` (SQLiteのデータ整合性を保つため)
 
 ---
 
-## 2. Dockerfile の例 (Native AOT + Alpine Linux)
+## 2. Dockerfile の例 (JIT コンパイル + Alpine Linux)
 
-Native AOT コンパイルには C++ コンパイラ (`clang`) や C ライブラリのヘッダーファイル (`musl-dev`) が必要です。マルチステージビルドを使用して、軽量な Alpine ランタイムイメージを作成します。
+マルチステージビルドを使用して、軽量な ASP.NET Core Alpine ランタイムイメージを作成します。
 
 ```dockerfile
 # ==========================================
-# 1. ビルドステージ (SDK + Native AOT ツールチェーン)
+# 1. ビルドステージ (SDK ツールチェーン)
 # ==========================================
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
 WORKDIR /src
 
-# Native AOT コンパイルに必要なパッケージのインストール
-RUN apk add --no-cache \
-    clang \
-    musl-dev \
-    build-base \
-    zlib-dev
-
 # プロジェクトファイルのコピーと依存関係の復元
 COPY ["HabitTracker.csproj", "./"]
-RUN dotnet restore "HabitTracker.csproj" -r linux-musl-x64
+RUN dotnet restore "HabitTracker.csproj"
 
-# ソースコードのコピーと Native AOT パブリッシュ
+# ソースコードのコピーとパブリッシュ
 COPY . .
 RUN dotnet publish "HabitTracker.csproj" \
     -c Release \
-    -r linux-musl-x64 \
-    --self-contained true \
-    /p:PublishAot=true \
     -o /app/publish
 
 # ==========================================
-# 2. 実行ステージ (軽量ランタイム)
+# 2. 実行ステージ (.NET ASP.NET Core ランタイム)
 # ==========================================
-FROM mcr.microsoft.com/dotnet/nightly/runtime-deps:10.0-alpine AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
 WORKDIR /app
 
 # セキュリティのため非ルートユーザーを作成・使用
@@ -67,7 +57,7 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
 # アプリケーションの実行
-ENTRYPOINT ["./HabitTracker"]
+ENTRYPOINT ["dotnet", "HabitTracker.dll"]
 ```
 
 ---
@@ -114,7 +104,7 @@ ENTRYPOINT ["./HabitTracker"]
    - **未認証の呼び出しを許可**: 外部公開する場合は「未認証の呼び出しを許可」を選択します。
 
 3. **スケーリングとインスタンス数の設定**
-   - **最小インスタンス数**: `0` (コスト優先) または `1` (Cold Startを完全に回避したい場合)
+   - **最小インスタンス数**: `0` (コスト優先) または `1` (Cold Startを回避したい場合)
    - **最大インスタンス数**: `1` (**必須**: SQLiteのデータ破損・競合を防止するため)
 
 4. **コンテナ、ボリューム、変数設定 (詳細設定)**
@@ -150,7 +140,7 @@ gcloud run deploy habit-tracker-service \
     --mount-volume=volume=db-volume,mount-path=/app/data
 ```
 
-※ `--cpu-boost` オプションを有効にすることで、インスタンス起動時の CPU が一時的に強化され、Native AOT と相まって起動速度がさらに向上します。
+※ `--cpu-boost` オプションを有効にすることで、インスタンス起動時の CPU が一時的に強化され、JIT コンパイル時の起動速度向上に寄与します。
 
 ---
 
@@ -229,10 +219,10 @@ jobs:
 
 ## 5. 運用のポイント・注意事項
 
-1. **Native AOT とリフレクション**
-   - .NET Native AOT では、動的リフレクションやコード生成を行うライブラリが適切に動作しない場合があります。Dapper や JSON シリアライザを使用する場合は、ソースジェネレーターや AOT 互換設定を確認してください。
+1. **JIT コンパイル環境の利点と特徴**
+   - JIT コンパイル方式（標準の ASP.NET Core ランタイム）では、Native AOT で発生する動的リフレクションや動的コード生成の制限がなく、各種 C# ライブラリとの高い互換性が保たれます。
 2. **SQLite と GCS Volume Mount**
    - GCS Volume Mount (`gcsfuse`) はネットワーク経由でストレージをマウントするため、ローカルディスクと比較してファイル I/O（特に細かいランダム書き込み）の遅延が発生する場合があります。
    - SQLite の同時書き込み競合を避けるため、Cloud Run の `--max-instances=1` 設定は必須です。
 3. **起動パフォーマンスの向上**
-   - Native AOT ＋ Alpine Linux に加え、`--cpu-boost` を有効にすることで起動時のレスポンス性能を劇的に改善できます。
+   - JIT コンパイル環境において、`--cpu-boost` を有効にすることでコンテナ起動初期の CPU パワーが強化され、Cold Start 時のレスポンス性能を改善できます。
