@@ -1,153 +1,116 @@
 # Cloud Run デプロイ手順書 (2026年版)
 
-本書は、.NET 10 アプリケーションを JIT コンパイル (ASP.NET Core ランタイム) ＋ Alpine Linux 環境でビルドし、**Google Cloud Run** へデプロイするための手順書です。
+本書は、.NET 10 アプリケーション (.NET Minimal API + SQLite) を Google Cloud Run へ**最小のコマンド操作・パラメータ指定**でデプロイするための手順書です。
+
+2026年現在のベストプラクティスとして、GUI (Webコンソール) や `gcloud` の長いパラメータフラグを使わず、リポジトリ内の設定ファイル (`service.yaml`) による**宣言的デプロイ**を採用しています。
 
 ---
 
 ## 1. 概要と構成要素
 
 - **アプリケーション構成**: .NET 10 Minimal API + SQLite
-- **コンテナビルド**: JIT コンパイル ＋ Alpine Linux (マルチステージビルド)
-- **デプロイ先**: Google Cloud Run
+- **コンテナビルド**: ASP.NET Core 10 Alpine ランタイム (マルチステージビルド)
+- **構成管理**: `service.yaml` (Cloud Run サービス定義ファイル)
 - **データベース永続化**: Google Cloud Storage (GCS) ボリュームマウント (`/app/data`)
-- **インスタンス制限**: `max-instances=1` (SQLiteのデータ整合性を保つため)
+- **インスタンス制限**: `maxScale: 1` (SQLiteのデータ競合・破損防止)
 
 ---
 
-## 2. Dockerfile の例 (JIT コンパイル + Alpine Linux)
+## 2. リポジトリ内の構成ファイル
 
-マルチステージビルドを使用して、軽量な ASP.NET Core Alpine ランタイムイメージを作成します。
+デプロイ設定はリポジトリ内のコードとして管理されます。
 
-```dockerfile
-# ==========================================
-# 1. ビルドステージ (SDK ツールチェーン)
-# ==========================================
-FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
-WORKDIR /src
+### 📄 `service.yaml` (Cloud Run サービス定義)
 
-# プロジェクトファイルのコピーと依存関係の復元
-COPY ["HabitTracker.csproj", "./"]
-RUN dotnet restore "HabitTracker.csproj"
-
-# ソースコードのコピーとパブリッシュ
-COPY . .
-RUN dotnet publish "HabitTracker.csproj" \
-    -c Release \
-    -o /app/publish
-
-# ==========================================
-# 2. 実行ステージ (.NET ASP.NET Core ランタイム)
-# ==========================================
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
-WORKDIR /app
-
-# セキュリティのため非ルートユーザーを作成・使用
-RUN adduser -D -u 1000 appuser && \
-    mkdir -p /app/data && \
-    chown -R appuser:appuser /app
-
-USER appuser
-
-# ビルド成果物のコピー
-COPY --from=build /app/publish .
-
-# 環境変数とポート設定
-ENV PORT=8080
-ENV ASPNETCORE_URLS=http://+:8080
-EXPOSE 8080
-
-# アプリケーションの実行
-ENTRYPOINT ["dotnet", "HabitTracker.dll"]
+```yaml
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: habit-tracker-service
+  labels:
+    cloud.googleapis.com/location: asia-northeast1
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      containers:
+        - image: asia-northeast1-docker.pkg.dev/PROJECT_ID/habit-tracker-repo/habit-tracker:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: db-volume
+              mountPath: /app/data
+      volumes:
+        - name: db-volume
+          csi:
+            driver: gcsfuse.run.googleapis.net
+            volumeAttributes:
+              bucketName: PROJECT_ID-db-bucket
 ```
 
----
-
-## 3. Cloud Run デプロイ手順
-
-基本は Google Cloud Console (Web画面) で設定を行いますが、ボリュームマウントや権限設定は **gcloud CLI** を使用した方が設定漏れが無く圧倒的に簡単かつ再現性が高いため、CLI での操作例も併記します。
-
-### 前提条件の準備 (初回のみ)
-
-1. **GCP プロジェクトの設定と API の有効化**
-   ```bash
-   gcloud config set project YOUR_PROJECT_ID
-   gcloud services enable run.googleapis.com artifactregistry.googleapis.com storage.googleapis.com
-   ```
-
-2. **Artifact Registry リポジトリの作成**
-   ```bash
-   gcloud artifacts repositories create habit-tracker-repo \
-       --repository-format=docker \
-       --location=asia-northeast1 \
-       --description="Habit Tracker Container Repository"
-   ```
-
-3. **SQLite 永続化用 GCS バケットの作成**
-   ```bash
-   gcloud storage buckets create gs://YOUR_PROJECT_ID-db-bucket --location=asia-northeast1
-   ```
+※ `PROJECT_ID` 部分をご自身の GCP プロジェクト ID に置き換えて使用します。
 
 ---
 
-### 方法 A: Web コンソール (Google Cloud Console) からデプロイする場合
+## 3. 初回セットアップ (環境準備)
 
-1. **コンテナイメージのビルドとプッシュ**
-   ```bash
-   gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest .
-   ```
-
-2. **Cloud Run サービスの作成**
-   - Google Cloud Console の [Cloud Run] 画面を開き、**[サービスを作成]** をクリックします。
-   - **コンテナのデプロイ**: 「既存のコンテナイメージから 1 つのリビジョンをデプロイする」を選択し、上記でプッシュしたイメージ `asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest` を指定します。
-   - **サービス名**: `habit-tracker-service`
-   - **リージョン**: `asia-northeast1 (東京)`
-   - **未認証の呼び出しを許可**: 外部公開する場合は「未認証の呼び出しを許可」を選択します。
-
-3. **スケーリングとインスタンス数の設定**
-   - **最小インスタンス数**: `0` (コスト優先) または `1` (Cold Startを回避したい場合)
-   - **最大インスタンス数**: `1` (**必須**: SQLiteのデータ破損・競合を防止するため)
-
-4. **コンテナ、ボリューム、変数設定 (詳細設定)**
-   - **コンテナポート**: `8080`
-   - **ボリューム**: [ボリュームを追加] -> [Cloud Storage バケット] を選択
-     - ボリューム名: `db-volume`
-     - バケット名: `YOUR_PROJECT_ID-db-bucket`
-   - **ボリュームのマウント**:
-     - マウントパス: `/app/data`
-
----
-
-### 方法 B: gcloud CLI からデプロイする場合 (推奨: 簡単かつ確実)
-
-Web画面での複雑なボリュームマウントやインスタンス制限設定を、1つのコマンドでまとめて実行できます。
+初回のみ、以下のリソース作成と初期設定を行います。
 
 ```bash
-# 1. ローカルまたは Cloud Build でイメージをビルド＆プッシュ
-gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest .
+# 1. GCP プロジェクトの指定と必要 API の有効化
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com storage.googleapis.com
 
-# 2. Cloud Run へのデプロイ (GCS ボリュームマウント ＋ 最大インスタンス数 1 の指定)
-gcloud run deploy habit-tracker-service \
-    --image=asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest \
-    --region=asia-northeast1 \
-    --platform=managed \
-    --allow-unauthenticated \
-    --port=8080 \
-    --cpu=1 \
-    --memory=512Mi \
-    --max-instances=1 \
-    --cpu-boost \
-    --add-volume=name=db-volume,type=cloud-storage,bucket=YOUR_PROJECT_ID-db-bucket \
-    --mount-volume=volume=db-volume,mount-path=/app/data
+# 2. Artifact Registry リポジトリの作成
+gcloud artifacts repositories create habit-tracker-repo \
+    --repository-format=docker \
+    --location=asia-northeast1
+
+# 3. SQLite 永続化用 GCS バケットの作成
+gcloud storage buckets create gs://YOUR_PROJECT_ID-db-bucket --location=asia-northeast1
 ```
-
-※ `--cpu-boost` オプションを有効にすることで、インスタンス起動時の CPU が一時的に強化され、JIT コンパイル時の起動速度向上に寄与します。
 
 ---
 
-## 4. GitHub Actions による CI/CD ワークフロー例
+## 4. デプロイ手順 (宣言的デプロイ)
 
-リポジトリの `.github/workflows/deploy.yml` に配置して使用します。
-Google Cloud への認証には Workload Identity Federation を使用する構成が安全で推奨されます。
+長いオプション指定や GUI 操作は不要です。イメージのビルドと設定ファイルの適用のみで完了します。
+
+### ステップ 1: コンテナイメージのビルド & プッシュ
+
+```bash
+gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest .
+```
+
+### ステップ 2: サービス定義の適用 (デプロイ)
+
+`service.yaml` を指定してサービスをデプロイします。
+
+```bash
+gcloud run services replace service.yaml
+```
+
+認証なしアクセス (公開) を許可する場合は、初回のみ以下のコマンドを併せ実行します。
+
+```bash
+gcloud run services set-iam-policy habit-tracker-service --region=asia-northeast1 policy.yaml
+```
+※ または `gcloud run deploy habit-tracker-service --image=... --region=asia-northeast1 --allow-unauthenticated` の短縮コマンド等でも設定可能です。
+
+---
+
+## 5. GitHub Actions による CI/CD ワークフロー例
+
+`.github/workflows/deploy.yml` でも `service.yaml` を読み込むことで、ワークフローの定義を非常にシンプルに保つことができます。
 
 ```yaml
 name: Deploy to Cloud Run
@@ -156,15 +119,6 @@ on:
   push:
     branches:
       - main
-
-env:
-  PROJECT_ID: 'YOUR_PROJECT_ID' # GCP プロジェクト ID に置き換えてください
-  REGION: 'asia-northeast1'
-  REPOSITORY: 'habit-tracker-repo'
-  SERVICE: 'habit-tracker-service'
-  GCS_BUCKET: 'YOUR_PROJECT_ID-db-bucket'
-  WORKLOAD_IDENTITY_PROVIDER: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
-  SERVICE_ACCOUNT: 'github-actions-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com'
 
 jobs:
   deploy:
@@ -180,49 +134,29 @@ jobs:
       - name: Google Auth (Workload Identity)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.SERVICE_ACCOUNT }}
+          workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
+          service_account: 'github-actions-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com'
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Authorize Docker Push to Artifact Registry
+      - name: Build and Push Container
         run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:${{ github.sha }} .
+          gcloud builds submit --tag asia-northeast1-docker.pkg.dev/YOUR_PROJECT_ID/habit-tracker-repo/habit-tracker:latest .
 
-      - name: Build and Push Docker Image
+      - name: Deploy to Cloud Run using service.yaml
         run: |
-          IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}"
-          LATEST_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:latest"
-
-          docker build -t $IMAGE_TAG -t $LATEST_TAG .
-          docker push $IMAGE_TAG
-          docker push $LATEST_TAG
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.SERVICE }} \
-            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }} \
-            --region=${{ env.REGION }} \
-            --platform=managed \
-            --allow-unauthenticated \
-            --port=8080 \
-            --cpu=1 \
-            --memory=512Mi \
-            --max-instances=1 \
-            --cpu-boost \
-            --add-volume=name=db-volume,type=cloud-storage,bucket=${{ env.GCS_BUCKET }} \
-            --mount-volume=volume=db-volume,mount-path=/app/data
+          gcloud run services replace service.yaml
 ```
 
 ---
 
-## 5. 運用のポイント・注意事項
+## 6. 運用のポイント・注意事項
 
-1. **JIT コンパイル環境の利点と特徴**
-   - JIT コンパイル方式（標準の ASP.NET Core ランタイム）では、Native AOT で発生する動的リフレクションや動的コード生成の制限がなく、各種 C# ライブラリとの高い互換性が保たれます。
-2. **SQLite と GCS Volume Mount**
-   - GCS Volume Mount (`gcsfuse`) はネットワーク経由でストレージをマウントするため、ローカルディスクと比較してファイル I/O（特に細かいランダム書き込み）の遅延が発生する場合があります。
-   - SQLite の同時書き込み競合を避けるため、Cloud Run の `--max-instances=1` 設定は必須です。
-3. **起動パフォーマンスの向上**
-   - JIT コンパイル環境において、`--cpu-boost` を有効にすることでコンテナ起動初期の CPU パワーが強化され、Cold Start 時のレスポンス性能を改善できます。
+1. **宣言的設定管理 (`service.yaml`) のメリット**
+   - リソース制限・環境変数・ボリュームマウント設定がすべてコード化され、`gcloud` コマンドの長いオプション指定やコンソール画面での誤操作を防げます。
+2. **SQLite と GCS Volume Mount (`gcsfuse`)**
+   - Cloud Run 上の SQLite データの破損を防止するため、`autoscaling.knative.dev/maxScale: "1"` の設定を維持してください。
+3. **起動速度の最適化 (`startup-cpu-boost`)**
+   - `run.googleapis.com/startup-cpu-boost: "true"` を有効化することで、コンテナ起動時の CPU が一時的に強化され、JIT コンパイルのオーバーヘッドを削減できます。
