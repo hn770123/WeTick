@@ -7,7 +7,7 @@
 
 @*
     モジュール名: Pages/Index.cshtml
-    説明: HabitTracker のメインダッシュボード画面 Razor Page（htmx統合・ボトムナビゲーション・Pico.css対応）です。
+    説明: HabitTracker のメインダッシュボード画面 Razor Page（タイムライン表示・ボトムナビゲーション・Pico.css対応）です。
 *@
 
 <style>
@@ -58,28 +58,7 @@
         color: var(--pico-primary-hover, #60a5fa);
     }
 
-    /* タブコンテンツ切替制御クラス */
-    .view-section {
-        display: none;
-    }
-
-    .view-section.active {
-        display: block;
-    }
-
     /* タイムライン・リスト補助スタイル */
-    .habit-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 0;
-        border-bottom: 1px solid var(--pico-muted-border-color, #2d3843);
-    }
-
-    .habit-item:last-child {
-        border-bottom: none;
-    }
-
     .timeline-item {
         margin-bottom: 1rem;
         padding: 1rem;
@@ -122,8 +101,8 @@
     </div>
 </header>
 
-<!-- 1. タイムラインセクション（デフォルト表示） -->
-<section id="section-timeline" class="view-section active">
+<!-- タイムラインセクション -->
+<section id="section-timeline">
     <article>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h3 style="margin: 0;">👥 タイムライン</h3>
@@ -138,21 +117,13 @@
     </article>
 </section>
 
-<!-- 2. タスクのチェックセクション -->
-<section id="section-task-check" class="view-section">
-    <article>
-        <h3>✅ マイ習慣一覧（ワンタップ実行）</h3>
-        <div id="habits-list">読み込み中...</div>
-    </article>
-</section>
-
 <!-- ボトムナビゲーションバー（画面下部固定） -->
 <nav class="bottom-nav">
-    <a href="#" id="nav-timeline" class="bottom-nav-item active" onclick="switchView('timeline', event)">
+    <a href="/" id="nav-timeline" class="bottom-nav-item active">
         <span class="nav-icon">👥</span>
         <span class="nav-label">タイムライン</span>
     </a>
-    <a href="#" id="nav-task-check" class="bottom-nav-item" onclick="switchView('task-check', event)">
+    <a href="/TaskCheck" id="nav-task-check" class="bottom-nav-item">
         <span class="nav-icon">✅</span>
         <span class="nav-label">タスクのチェック</span>
     </a>
@@ -167,43 +138,6 @@
     let currentUserEmoji = '👤';
     let currentUserName = '@Model.CurrentUser';
 
-    /**
-     * ボトムナビゲーション選択時に表示するセクションを切り替えます。
-     * @@param {string} viewName 表示対象の画面名 ('timeline', 'task-check')
-     * @@param {Event} event イベントオブジェクト
-     */
-    function switchView(viewName, event) {
-        if (event) event.preventDefault();
-
-        // すべてのセクションを非表示
-        const sections = document.querySelectorAll('.view-section');
-        sections.forEach(s => s.classList.remove('active'));
-
-        // ボトムナビリンクの active クラス解除
-        const navLinks = document.querySelectorAll('.bottom-nav-item');
-        navLinks.forEach(l => l.classList.remove('active'));
-
-        // 対象セクションおよびナビリンクをアクティブ化
-        const targetSection = document.getElementById(`section-${viewName}`);
-        const targetLink = document.getElementById(`nav-${viewName}`);
-        const pageTitle = document.getElementById('page-title');
-
-        if (targetSection) targetSection.classList.add('active');
-        if (targetLink) targetLink.classList.add('active');
-
-        // タイトルおよびデータ取得処理の切り替え
-        switch (viewName) {
-            case 'timeline':
-                pageTitle.innerText = '習慣トラッカー - タイムライン';
-                loadTimeline();
-                break;
-            case 'task-check':
-                pageTitle.innerText = '習慣トラッカー - タスクのチェック';
-                loadHabits();
-                break;
-        }
-    }
-
     async function loadUser() {
         const res = await fetch(`/api/users/me`);
         if (res.ok) {
@@ -211,50 +145,6 @@
             currentUserId = u.id;
             currentUserEmoji = u.emoji || '👤';
             currentUserName = u.name || '@Model.CurrentUser';
-        }
-    }
-
-    async function loadHabits() {
-        const res = await fetch(`/api/habits?userId=${currentUserId}`);
-        const habits = await res.json();
-        const container = document.getElementById('habits-list');
-
-        if (!habits || habits.length === 0) {
-            container.innerHTML = '<p>登録されている習慣がありません。</p>';
-            return;
-        }
-
-        container.innerHTML = habits.map(h => `
-            <div class="habit-item" style="flex-wrap: wrap; gap: 10px;">
-                <div style="flex: 1; min-width: 200px;">
-                    <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
-                    <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
-                    ${h.description ? `<p style="margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;">${escapeHtml(h.description)}</p>` : ''}
-                </div>
-                <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 280px; justify-content: flex-end;">
-                    <input type="text" id="habit-comment-${h.id}" placeholder="記録コメント（任意）" style="margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;">
-                    <button style="margin-bottom: 0; width: auto;" onclick="executeHabit(${h.id})">✅ 実行</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    async function executeHabit(habitId) {
-        const commentInput = document.getElementById(`habit-comment-${habitId}`);
-        const commentText = commentInput ? commentInput.value.trim() : '';
-
-        const res = await fetch(`/api/habits/${habitId}/execute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, comment: commentText || 'ワンタップ実行！' })
-        });
-
-        if (res.ok) {
-            if (commentInput) commentInput.value = '';
-            loadTimeline();
-            alert('🎉 習慣の実行を記録しました！');
-        } else {
-            alert('実行記録の保存に失敗しました。');
         }
     }
 
@@ -402,7 +292,7 @@
         return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // 初期ロード（デフォルトでタイムラインを表示）
+    // 初期ロード
     async function init() {
         await loadUser();
         loadGroups();
