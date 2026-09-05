@@ -1,0 +1,423 @@
+@page "/Settings"
+@model HabitTracker.Pages.SettingsModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "設定";
+}
+
+@*
+    モジュール名: Pages/Settings.cshtml
+    説明: 設定専用画面の Razor Page（習慣管理、グループ管理、プロフィール設定、パスワード変更、ログアウト）です。
+          固定ナビゲーションバーは含まず、タイムラインに戻るボタンを設置します。
+*@
+
+<style>
+    /* 習慣管理・リスト補助スタイル */
+    .habit-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--pico-muted-border-color, #2d3843);
+    }
+
+    .habit-item:last-child {
+        border-bottom: none;
+    }
+</style>
+
+<!-- ヘッダーバー（タイムラインに戻るボタンを配置） -->
+<header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <div>
+        <a href="/" role="button" class="secondary" style="margin-bottom: 0; display: inline-flex; align-items: center; gap: 4px;">⬅️ タイムラインに戻る</a>
+    </div>
+    <div>
+        <h2 style="margin: 0; font-size: 1.4rem;">⚙️ 設定</h2>
+    </div>
+    <div>
+        <small style="font-weight: bold;">ログイン中: @Model.CurrentUser</small>
+    </div>
+</header>
+
+<!-- 設定メインコンテンツ -->
+<section id="section-settings">
+    <!-- 習慣登録フォーム -->
+    <article>
+        <h3>📝 新しい習慣を登録</h3>
+        <form id="create-habit-form" onsubmit="createHabit(event)">
+            <label for="title">習慣のタイトル
+                <input type="text" id="title" required placeholder="例: 毎朝散歩する">
+            </label>
+            <div class="grid">
+                <label for="emoji">タスク絵文字
+                    <input type="text" id="emoji" value="📝" placeholder="例: 🏃, 📚, 🧘">
+                </label>
+                <label for="frequency">頻度
+                    <select id="frequency">
+                        <option value="Daily">毎日</option>
+                        <option value="Weekly">毎週</option>
+                    </select>
+                </label>
+            </div>
+            <label for="description">詳細メモ（任意）
+                <input type="text" id="description" placeholder="例: 20分以上">
+            </label>
+            <button type="submit">習慣を追加</button>
+        </form>
+    </article>
+
+    <!-- 登録済み習慣の管理・編集・削除 -->
+    <article>
+        <h3>🛠️ 習慣（タスク）の管理</h3>
+        <div id="manage-habits-list">読み込み中...</div>
+    </article>
+
+    <!-- グループ管理 -->
+    <article>
+        <h3>👥 所属グループ管理</h3>
+        <div id="groups-list" style="margin-bottom: 15px;">読み込み中...</div>
+        <hr>
+        <div class="grid">
+            <form id="create-group-form" onsubmit="createGroup(event)">
+                <label for="group-name">新規グループ作成
+                    <input type="text" id="group-name" required placeholder="例: 家族チーム, 開発部">
+                </label>
+                <button type="submit">グループを作成</button>
+            </form>
+            <form id="join-group-form" onsubmit="joinGroup(event)">
+                <label for="invite-code">招待コードで参加
+                    <input type="text" id="invite-code" required placeholder="例: A1B2C3D4">
+                </label>
+                <button type="submit" class="secondary">グループに参加</button>
+            </form>
+        </div>
+    </article>
+
+    <!-- ユーザープロフィール設定 -->
+    <article>
+        <h3>👤 ユーザープロフィール設定</h3>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span id="user-display" style="font-size: 1.1em; font-weight: bold;">👤 テストユーザー</span>
+            <input type="text" id="user-emoji-input" style="width: 60px; text-align: center; font-size: 1.2em; margin-bottom: 0;" value="👤">
+            <button style="width: auto; margin-bottom: 0;" onclick="updateUserEmoji()">絵文字更新</button>
+        </div>
+    </article>
+
+    <!-- ユーザー名・パスワード変更 -->
+    <article>
+        <h3>🔒 ユーザー名・パスワード変更</h3>
+        <form id="change-password-form" onsubmit="changePassword(event)">
+            <label for="new-username">新しいユーザー名（変更する場合のみ入力）
+                <input type="text" id="new-username" placeholder="変更後のユーザー名">
+            </label>
+            <div class="grid">
+                <label for="current-password">現在のパスワード
+                    <input type="password" id="current-password" required placeholder="現在のパスワード">
+                </label>
+                <label for="new-password">新しいパスワード
+                    <input type="password" id="new-password" required placeholder="新しいパスワード">
+                </label>
+            </div>
+            <button type="submit">アカウント情報を変更</button>
+        </form>
+    </article>
+
+    <!-- ログアウト -->
+    <article style="text-align: center;">
+        <a href="/logout" role="button" class="contrast outline" style="width: 100%;">🚪 ログアウト</a>
+    </article>
+</section>
+
+<script>
+    let currentUserId = 1;
+    let currentUserEmoji = '👤';
+    let currentUserName = '@Model.CurrentUser';
+
+    /**
+     * ログイン中のユーザー情報を非同期で取得します。
+     */
+    async function loadUser() {
+        const res = await fetch(`/api/users/me`);
+        if (res.ok) {
+            const u = await res.json();
+            currentUserId = u.id;
+            currentUserEmoji = u.emoji || '👤';
+            currentUserName = u.name || '@Model.CurrentUser';
+            document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
+            document.getElementById('user-emoji-input').value = currentUserEmoji;
+        }
+    }
+
+    /**
+     * ユーザーの表示用絵文字を更新します。
+     */
+    async function updateUserEmoji() {
+        const emoji = document.getElementById('user-emoji-input').value || '👤';
+        const res = await fetch(`/api/users/${currentUserId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: currentUserName, emoji: emoji })
+        });
+
+        if (res.ok) {
+            currentUserEmoji = emoji;
+            document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
+            alert('ユーザーの絵文字を更新しました！');
+        } else {
+            alert('ユーザー絵文字の更新に失敗しました。');
+        }
+    }
+
+    /**
+     * パスワードおよびユーザー名を変更します。
+     */
+    async function changePassword(e) {
+        e.preventDefault();
+        const currentPassword = document.getElementById('current-password').value;
+        const newPassword = document.getElementById('new-password').value;
+        const newUsername = document.getElementById('new-username').value.trim();
+
+        const res = await fetch('/api/users/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentPassword, newPassword, newUsername: newUsername || null })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            document.getElementById('change-password-form').reset();
+            if (data.newUsername) {
+                currentUserName = data.newUsername;
+                document.getElementById('user-display').innerText = `${currentUserEmoji} ${currentUserName}`;
+            }
+            alert('🔒 アカウント情報（パスワード / ユーザー名）を変更しました！');
+        } else {
+            const err = await res.json();
+            alert(err.message || 'アカウント情報の変更に失敗しました。');
+        }
+    }
+
+    /**
+     * 新規習慣を登録します。
+     */
+    async function createHabit(e) {
+        e.preventDefault();
+        const title = document.getElementById('title').value;
+        const emoji = document.getElementById('emoji').value || '📝';
+        const description = document.getElementById('description').value;
+        const frequency = document.getElementById('frequency').value;
+
+        const res = await fetch('/api/habits', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUserId, title, description, emoji, frequency })
+        });
+
+        if (res.ok) {
+            document.getElementById('create-habit-form').reset();
+            document.getElementById('emoji').value = '📝';
+            loadManageHabits();
+            alert('新しい習慣を追加しました！');
+        } else {
+            alert('習慣の追加に失敗しました。');
+        }
+    }
+
+    /**
+     * 登録済みの習慣一覧を取得し、管理（編集・削除）UIをレンダリングします。
+     */
+    async function loadManageHabits() {
+        const res = await fetch(`/api/habits?userId=${currentUserId}`);
+        const habits = await res.json();
+        const container = document.getElementById('manage-habits-list');
+
+        if (!container) return;
+
+        if (!habits || habits.length === 0) {
+            container.innerHTML = '<p style="opacity: 0.8;">登録されている習慣がありません。</p>';
+            return;
+        }
+
+        container.innerHTML = habits.map(h => `
+            <div class="habit-item" style="flex-wrap: wrap; gap: 10px;" id="manage-habit-item-${h.id}">
+                <div style="flex: 1; min-width: 200px;">
+                    <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
+                    <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
+                    ${h.description ? `<p style="margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;">${escapeHtml(h.description)}</p>` : ''}
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="secondary" style="padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="toggleEditHabitForm(${h.id})">✏️ 編集</button>
+                    <button class="contrast" style="padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="deleteHabit(${h.id})">🗑️ 削除</button>
+                </div>
+                <div id="edit-habit-form-${h.id}" style="display: none; width: 100%; margin-top: 10px; background: var(--pico-muted-border-color, #1e293b); padding: 12px; border-radius: 6px;">
+                    <label style="font-size: 0.85em;">タイトル
+                        <input type="text" id="edit-title-${h.id}" value="${escapeHtml(h.title)}" style="padding: 6px;">
+                    </label>
+                    <label style="font-size: 0.85em;">絵文字
+                        <input type="text" id="edit-emoji-${h.id}" value="${escapeHtml(h.emoji || '📝')}" style="padding: 6px;">
+                    </label>
+                    <label style="font-size: 0.85em;">詳細メモ
+                        <input type="text" id="edit-description-${h.id}" value="${escapeHtml(h.description || '')}" style="padding: 6px;">
+                    </label>
+                    <label style="font-size: 0.85em;">頻度
+                        <select id="edit-frequency-${h.id}" style="padding: 6px;">
+                            <option value="Daily" ${h.frequency === 'Daily' ? 'selected' : ''}>毎日</option>
+                            <option value="Weekly" ${h.frequency === 'Weekly' ? 'selected' : ''}>毎週</option>
+                        </select>
+                    </label>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                        <button style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="updateHabit(${h.id})">保存</button>
+                        <button class="secondary" style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;" onclick="toggleEditHabitForm(${h.id})">キャンセル</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    /**
+     * 習慣インライン編集フォームの開閉をトグルします。
+     */
+    function toggleEditHabitForm(habitId) {
+        const el = document.getElementById(`edit-habit-form-${habitId}`);
+        if (el) {
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+    }
+
+    /**
+     * 習慣情報を更新（PUT）します。
+     */
+    async function updateHabit(habitId) {
+        const title = document.getElementById(`edit-title-${habitId}`).value;
+        const emoji = document.getElementById(`edit-emoji-${habitId}`).value || '📝';
+        const description = document.getElementById(`edit-description-${habitId}`).value;
+        const frequency = document.getElementById(`edit-frequency-${habitId}`).value;
+
+        if (!title.trim()) {
+            alert('タイトルを入力してください。');
+            return;
+        }
+
+        const res = await fetch(`/api/habits/${habitId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, description, emoji, frequency })
+        });
+
+        if (res.ok) {
+            alert('習慣を更新しました！');
+            loadManageHabits();
+        } else {
+            alert('習慣の更新に失敗しました。');
+        }
+    }
+
+    /**
+     * 習慣を削除（DELETE）します。
+     */
+    async function deleteHabit(habitId) {
+        if (!confirm('この習慣を削除しますか？')) return;
+
+        const res = await fetch(`/api/habits/${habitId}`, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            alert('習慣を削除しました。');
+            loadManageHabits();
+        } else {
+            alert('習慣の削除に失敗しました。');
+        }
+    }
+
+    let userGroups = [];
+
+    /**
+     * 所属グループ一覧を取得します。
+     */
+    async function loadGroups() {
+        const res = await fetch(`/api/groups?userId=${currentUserId}`);
+        if (!res.ok) return;
+        userGroups = await res.json();
+
+        const container = document.getElementById('groups-list');
+
+        if (!userGroups || userGroups.length === 0) {
+            container.innerHTML = '<p style="opacity: 0.8;">所属しているグループはありません。</p>';
+            return;
+        }
+
+        container.innerHTML = userGroups.map(g => `
+            <div style="padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; background: var(--pico-muted-border-color, #1e293b);">
+                <div>
+                    <strong>🏢 ${escapeHtml(g.name)}</strong>
+                </div>
+                <div>
+                    <span style="font-size: 0.85em; padding: 4px 8px; border-radius: 4px; background: var(--pico-card-background-color, #18232c);">
+                        招待コード: <strong>${escapeHtml(g.inviteCode)}</strong>
+                    </span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    /**
+     * 新規グループを作成します。
+     */
+    async function createGroup(e) {
+        e.preventDefault();
+        const name = document.getElementById('group-name').value;
+        const res = await fetch('/api/groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUserId, name })
+        });
+
+        if (res.ok) {
+            const newGroup = await res.json();
+            document.getElementById('create-group-form').reset();
+            alert(`🎉 グループ「${newGroup.name}」を作成しました！\n招待コード: ${newGroup.inviteCode}`);
+            await loadGroups();
+        } else {
+            const err = await res.json();
+            alert(err.message || 'グループの作成に失敗しました。');
+        }
+    }
+
+    /**
+     * 招待コードで既存グループに参加します。
+     */
+    async function joinGroup(e) {
+        e.preventDefault();
+        const inviteCode = document.getElementById('invite-code').value;
+        const res = await fetch('/api/groups/join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUserId, inviteCode })
+        });
+
+        if (res.ok) {
+            const result = await res.json();
+            document.getElementById('join-group-form').reset();
+            alert(`🎉 ${result.message}`);
+            await loadGroups();
+        } else {
+            const err = await res.json();
+            alert(err.message || 'グループへの参加に失敗しました。');
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // 初期ロード
+    async function init() {
+        await loadUser();
+        loadManageHabits();
+        loadGroups();
+    }
+
+    init();
+</script>
