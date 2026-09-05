@@ -7,96 +7,28 @@
 
 @*
     モジュール名: Pages/Index.cshtml
-    説明: HabitTracker のメインダッシュボード画面 Razor Page（タイムライン表示・ボトムナビゲーション・Pico.css対応）です。
+    説明: HabitTracker のメインダッシュボード画面 Razor Page です。
+          pico-classless.css と htmx を使用し、JavaScript や過剰な CSS なしでタイムラインを表示します。
 *@
 
 <style>
-    /* ボトムナビゲーション固定表示のための画面余白 */
-    body {
-        padding-bottom: 80px;
-    }
-
-    /* 画面下部固定ボトムナビゲーションバーのスタイル設定 */
+    body { padding-bottom: 70px; }
     .bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        display: flex;
-        justify-content: space-around;
-        align-items: center;
+        position: fixed; bottom: 0; left: 0; right: 0;
+        display: flex; justify-content: space-around;
         background-color: var(--pico-card-background-color, #18232c);
         border-top: 1px solid var(--pico-muted-border-color, #2d3843);
-        padding: 8px 0;
-        z-index: 1000;
-        margin: 0;
+        padding: 8px 0; z-index: 1000; margin: 0; text-align: center;
     }
-
-    .bottom-nav-item {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-decoration: none;
-        color: var(--pico-secondary, #94a3b8);
-        font-size: 0.8rem;
-        font-weight: bold;
-        flex: 1;
-        text-align: center;
-        padding: 4px 0;
-    }
-
-    .bottom-nav-item .nav-icon {
-        font-size: 1.4rem;
-        line-height: 1.2;
-    }
-
-    .bottom-nav-item.active {
-        color: var(--pico-primary, #3b82f6);
-    }
-
-    .bottom-nav-item:hover {
-        color: var(--pico-primary-hover, #60a5fa);
-    }
-
-    /* タイムライン・リスト補助スタイル */
-    .timeline-item {
-        margin-bottom: 1rem;
-        padding: 1rem;
-        border-left: 4px solid var(--pico-primary, #3b82f6);
-    }
-
-    .reaction-bar {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
-        margin-top: 8px;
-    }
-
-    .reaction-badge {
-        background: var(--pico-muted-border-color, #2d3843);
-        padding: 4px 8px;
-        border-radius: 12px;
-        font-size: 0.9em;
-        cursor: pointer;
-    }
-
-    .comment-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 6px 10px;
-        margin-bottom: 6px;
-        background: var(--pico-muted-border-color, #1e293b);
-        border-radius: 6px;
-    }
+    .bottom-nav a { text-decoration: none; font-size: 0.85rem; font-weight: bold; flex: 1; color: var(--pico-secondary); }
+    .bottom-nav a.active { color: var(--pico-primary); }
 </style>
 
 <!-- ヘッダーバー -->
 <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-    <h2 style="margin: 0; font-size: 1.4rem;" id="page-title">習慣トラッカー - タイムライン</h2>
+    <h2 style="margin: 0; font-size: 1.4rem;">習慣トラッカー</h2>
     <div style="display: flex; align-items: center; gap: 12px;">
-        <small style="font-weight: bold;">ログイン中: @Model.CurrentUser</small>
+        <small style="font-weight: bold;">👤 @Model.CurrentUser</small>
         <a href="/Settings" role="button" class="secondary" style="margin-bottom: 0; padding: 4px 10px; font-size: 0.85rem;">⚙️ 設定</a>
     </div>
 </header>
@@ -107,197 +39,25 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h3 style="margin: 0;">👥 タイムライン</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
-                <label for="group-filter" style="font-weight: bold; margin-bottom: 0;">表示フィルタ:</label>
-                <select id="group-filter" onchange="loadTimeline()" style="margin-bottom: 0; padding: 4px 8px;">
-                    <option value="all">すべての投稿</option>
+                <label for="group-filter" style="font-weight: bold; margin-bottom: 0;">フィルタ:</label>
+                <select name="groupId" id="group-filter" hx-get="/htmx/timeline" hx-target="#timeline-list" hx-swap="innerHTML" style="margin-bottom: 0; padding: 4px 8px;">
+                    <option value="">すべての投稿</option>
+                    @foreach (var g in Model.UserGroups)
+                    {
+                        <option value="@g.Id">🏢 @g.Name</option>
+                    }
                 </select>
             </div>
         </div>
-        <div id="timeline-list">読み込み中...</div>
+        <div id="timeline-list" hx-get="/htmx/timeline" hx-trigger="load" hx-swap="innerHTML">
+            <p>読み込み中...</p>
+        </div>
     </article>
 </section>
 
-<!-- ボトムナビゲーションバー（画面下部固定） -->
+<!-- ボトムナビゲーションバー -->
 <nav class="bottom-nav">
-    <a href="/" id="nav-timeline" class="bottom-nav-item active">
-        <span class="nav-icon">👥</span>
-        <span class="nav-label">タイムライン</span>
-    </a>
-    <a href="/TaskCheck" id="nav-task-check" class="bottom-nav-item">
-        <span class="nav-icon">✅</span>
-        <span class="nav-label">タスクのチェック</span>
-    </a>
-    <a href="/Settings" id="nav-settings" class="bottom-nav-item">
-        <span class="nav-icon">⚙️</span>
-        <span class="nav-label">設定</span>
-    </a>
+    <a href="/" class="active">👥 タイムライン</a>
+    <a href="/TaskCheck">✅ タスクチェック</a>
+    <a href="/Settings">⚙️ 設定</a>
 </nav>
-
-<script>
-    let currentUserId = 1;
-    let currentUserEmoji = '👤';
-    let currentUserName = '@Model.CurrentUser';
-
-    async function loadUser() {
-        const res = await fetch(`/api/users/me`);
-        if (res.ok) {
-            const u = await res.json();
-            currentUserId = u.id;
-            currentUserEmoji = u.emoji || '👤';
-            currentUserName = u.name || '@Model.CurrentUser';
-        }
-    }
-
-    let userGroups = [];
-
-    async function loadGroups() {
-        const res = await fetch(`/api/groups?userId=${currentUserId}`);
-        if (!res.ok) return;
-        userGroups = await res.json();
-
-        const filterSelect = document.getElementById('group-filter');
-        if (!filterSelect) return;
-
-        const currentFilter = filterSelect.value;
-        filterSelect.innerHTML = '<option value="all">すべての投稿</option>';
-
-        userGroups.forEach(g => {
-            const option = document.createElement('option');
-            option.value = g.id;
-            option.textContent = `🏢 ${g.name}`;
-            filterSelect.appendChild(option);
-        });
-
-        if (userGroups.some(g => g.id.toString() === currentFilter)) {
-            filterSelect.value = currentFilter;
-        }
-    }
-
-    async function loadTimeline() {
-        const selectedGroupId = document.getElementById('group-filter')?.value || 'all';
-        const endpoint = selectedGroupId === 'all'
-            ? `/api/timeline?limit=15`
-            : `/api/groups/${selectedGroupId}/timeline?limit=15`;
-
-        const res = await fetch(endpoint);
-        const items = await res.json();
-        const container = document.getElementById('timeline-list');
-
-        if (!items || items.length === 0) {
-            container.innerHTML = '<p>まだタイムラインに記録がありません。</p>';
-            return;
-        }
-
-        const quickEmojis = ['👍', '🔥', '🎉', '❤️', '👏'];
-
-        container.innerHTML = items.map(item => `
-            <div class="timeline-item">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div style="display: flex; align-items: center; gap: 8px; font-weight: bold;">
-                        <span style="font-size: 1.4em;">${escapeHtml(item.userEmoji || '👤')}</span>
-                        <span>${escapeHtml(item.userName)}</span>
-                    </div>
-                    <small style="opacity: 0.7;">${new Date(item.executedAt).toLocaleString('ja-JP')}</small>
-                </div>
-                <div style="display: flex; align-items: center; gap: 6px; font-size: 1.1em; font-weight: bold; margin-bottom: 6px;">
-                    <span style="font-size: 1.3em;">${escapeHtml(item.habitEmoji || '📝')}</span>
-                    <span>${escapeHtml(item.habitTitle)}</span>
-                </div>
-                ${item.comment ? `<p style="margin: 4px 0 8px; opacity: 0.9;">コメント: ${escapeHtml(item.comment)}</p>` : ''}
-
-                <div class="reaction-bar">
-                    ${(item.reactions || []).map(r => `
-                        <span class="reaction-badge" title="タップしてリアクションを切り替え" onclick="toggleReaction(${item.logId}, '${escapeHtml(r.emoji)}')">${escapeHtml(r.emoji)} ${r.count}</span>
-                    `).join('')}
-                    <span style="opacity: 0.4;">|</span>
-                    ${quickEmojis.map(emoji => `
-                        <button class="secondary outline" style="padding: 2px 8px; margin-bottom: 0; width: auto; font-size: 0.9em;" onclick="toggleReaction(${item.logId}, '${emoji}')">${emoji}</button>
-                    `).join('')}
-                </div>
-
-                <!-- コメントセクション -->
-                <div style="margin-top: 12px; border-top: 1px dashed var(--pico-muted-border-color, #2d3843); padding-top: 10px; font-size: 0.9em;">
-                    <div id="comments-list-${item.logId}">
-                        ${(item.comments || []).map(c => `
-                            <div class="comment-item">
-                                <div>
-                                    <span>${escapeHtml(c.userEmoji)} <strong>${escapeHtml(c.userName)}</strong>: ${escapeHtml(c.commentText)}</span>
-                                </div>
-                                <div style="display: flex; align-items: center; gap: 6px;">
-                                    <small style="opacity: 0.6;">${new Date(c.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</small>
-                                    ${c.userId === currentUserId ? `<button style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8em; padding: 0; margin-bottom: 0; width: auto;" onclick="deleteComment(${c.id})">❌</button>` : ''}
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                    <form style="display: flex; gap: 6px; margin-top: 8px; margin-bottom: 0;" onsubmit="postComment(event, ${item.logId})">
-                        <input type="text" id="comment-input-${item.logId}" placeholder="応援コメントを入力..." required style="margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;">
-                        <button type="submit" style="padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;">送信</button>
-                    </form>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    async function toggleReaction(logId, emoji) {
-        const res = await fetch(`/api/logs/${logId}/reactions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, reactionType: emoji })
-        });
-
-        if (res.ok) {
-            loadTimeline();
-        } else {
-            alert('リアクションの送信に失敗しました。');
-        }
-    }
-
-    async function postComment(e, logId) {
-        e.preventDefault();
-        const inputEl = document.getElementById(`comment-input-${logId}`);
-        const text = inputEl ? inputEl.value : '';
-
-        if (!text.trim()) return;
-
-        const res = await fetch(`/api/logs/${logId}/comments`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, commentText: text })
-        });
-
-        if (res.ok) {
-            loadTimeline();
-        } else {
-            alert('コメントの送信に失敗しました。');
-        }
-    }
-
-    async function deleteComment(commentId) {
-        if (!confirm('このコメントを削除しますか？')) return;
-
-        const res = await fetch(`/api/comments/${commentId}`, {
-            method: 'DELETE'
-        });
-
-        if (res.ok) {
-            loadTimeline();
-        } else {
-            alert('コメントの削除に失敗しました。');
-        }
-    }
-
-    function escapeHtml(str) {
-        if (!str) return '';
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-
-    // 初期ロード
-    async function init() {
-        await loadUser();
-        loadGroups();
-        loadTimeline();
-    }
-
-    init();
-</script>
