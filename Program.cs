@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.Sqlite;
@@ -790,6 +791,575 @@ app.MapGet("/api/groups/{id:int}/timeline", (int id, int? limit) =>
 
     return Results.Ok(timelineItems);
 });
+
+// ------------------------------------------------------------
+// htmx 向け HTML レンダリング エンドポイントおよびヘルパー
+// ------------------------------------------------------------
+
+/// <summary>
+/// htmx 用ヘルパー関数: タイムラインアイテムの HTML フラグメントを生成します。
+/// </summary>
+static string RenderTimelineItemHtml(TimelineItemDto item, int currentUserId)
+{
+    var quickEmojis = new[] { "👍", "🔥", "🎉", "❤️", "👏" };
+
+    var reactionsHtml = string.Join("", item.Reactions.Select(r =>
+        $"<button hx-post=\"/htmx/logs/{item.LogId}/reactions?emoji={Uri.EscapeDataString(r.Emoji)}\" hx-target=\"#timeline-item-{item.LogId}\" hx-swap=\"outerHTML\" class=\"secondary\" style=\"padding: 2px 8px; margin-bottom: 0; margin-right: 4px; font-size: 0.9em; width: auto; display: inline-block;\">{System.Net.WebUtility.HtmlEncode(r.Emoji)} {r.Count}</button>"
+    ));
+
+    var quickEmojiButtonsHtml = string.Join("", quickEmojis.Select(e =>
+        $"<button hx-post=\"/htmx/logs/{item.LogId}/reactions?emoji={Uri.EscapeDataString(e)}\" hx-target=\"#timeline-item-{item.LogId}\" hx-swap=\"outerHTML\" class=\"outline secondary\" style=\"padding: 2px 8px; margin-bottom: 0; margin-right: 4px; font-size: 0.9em; width: auto; display: inline-block;\">{e}</button>"
+    ));
+
+    var commentsHtml = string.Join("", item.Comments.Select(c =>
+    {
+        string timeStr = DateTime.TryParse(c.CreatedAt, out var dt) ? dt.ToLocalTime().ToString("HH:mm") : "";
+        string deleteBtn = c.UserId == currentUserId ? $"<button hx-delete=\"/htmx/comments/{c.Id}?logId={item.LogId}\" hx-target=\"#timeline-item-{item.LogId}\" hx-swap=\"outerHTML\" style=\"background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8em; padding: 0; margin-bottom: 0; width: auto;\">❌</button>" : "";
+        return $@"<div style=""display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; margin-bottom: 6px; background: var(--pico-muted-border-color, #1e293b); border-radius: 6px;"">
+            <div><span>{System.Net.WebUtility.HtmlEncode(c.UserEmoji)} <strong>{System.Net.WebUtility.HtmlEncode(c.UserName)}</strong>: {System.Net.WebUtility.HtmlEncode(c.CommentText)}</span></div>
+            <div style=""display: flex; align-items: center; gap: 6px;"">
+                <small style=""opacity: 0.6;"">{timeStr}</small>
+                {deleteBtn}
+            </div>
+        </div>";
+    }));
+
+    var executedTimeStr = DateTime.TryParse(item.ExecutedAt, out var execDt) ? execDt.ToLocalTime().ToString("yyyy/MM/dd HH:mm") : item.ExecutedAt;
+
+    return $@"
+    <div id=""timeline-item-{item.LogId}"" style=""margin-bottom: 1rem; padding: 1rem; border-left: 4px solid var(--pico-primary, #3b82f6); background: var(--pico-card-background-color, #18232c); border-radius: 4px;"">
+        <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"">
+            <div style=""display: flex; align-items: center; gap: 8px; font-weight: bold;"">
+                <span style=""font-size: 1.4em;"">{System.Net.WebUtility.HtmlEncode(item.UserEmoji)}</span>
+                <span>{System.Net.WebUtility.HtmlEncode(item.UserName)}</span>
+            </div>
+            <small style=""opacity: 0.7;"">{executedTimeStr}</small>
+        </div>
+        <div style=""display: flex; align-items: center; gap: 6px; font-size: 1.1em; font-weight: bold; margin-bottom: 6px;"">
+            <span style=""font-size: 1.3em;"">{System.Net.WebUtility.HtmlEncode(item.HabitEmoji)}</span>
+            <span>{System.Net.WebUtility.HtmlEncode(item.HabitTitle)}</span>
+        </div>
+        {(string.IsNullOrEmpty(item.Comment) ? "" : $"<p style=\"margin: 4px 0 8px; opacity: 0.9;\">コメント: {System.Net.WebUtility.HtmlEncode(item.Comment)}</p>")}
+
+        <div style=""display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-top: 8px;"">
+            {reactionsHtml}
+            <span style=""opacity: 0.4; margin: 0 4px;"">|</span>
+            {quickEmojiButtonsHtml}
+        </div>
+
+        <div style=""margin-top: 12px; border-top: 1px dashed var(--pico-muted-border-color, #2d3843); padding-top: 10px; font-size: 0.9em;"">
+            <div>
+                {commentsHtml}
+            </div>
+            <form hx-post=""/htmx/logs/{item.LogId}/comments"" hx-target=""#timeline-item-{item.LogId}"" hx-swap=""outerHTML"" style=""display: flex; gap: 6px; margin-top: 8px; margin-bottom: 0;"">
+                <input type=""text"" name=""commentText"" placeholder=""応援コメントを入力..."" required style=""margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;"">
+                <button type=""submit"" style=""padding: 6px 12px; font-size: 0.85em; width: auto; margin-bottom: 0;"">送信</button>
+            </form>
+        </div>
+    </div>";
+}
+
+/// <summary>
+/// htmx 用: タイムライン一覧 HTML フラグメントを取得します。
+/// </summary>
+app.MapGet("/htmx/timeline", (HttpContext context, string? groupId) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    string query = @"
+        SELECT
+            el.Id AS LogId,
+            el.HabitId,
+            h.Title AS HabitTitle,
+            h.Emoji AS HabitEmoji,
+            el.UserId,
+            u.Name AS UserName,
+            u.Emoji AS UserEmoji,
+            el.ExecutedAt,
+            el.Comment
+        FROM ExecutionLogs el
+        JOIN Habits h ON el.HabitId = h.Id
+        JOIN Users u ON el.UserId = u.Id";
+
+    if (!string.IsNullOrEmpty(groupId) && int.TryParse(groupId, out int gId) && gId > 0)
+    {
+        query += " WHERE el.UserId IN (SELECT UserId FROM GroupMembers WHERE GroupId = " + gId + ")";
+    }
+
+    query += " ORDER BY el.Id DESC LIMIT 15;";
+
+    var items = connection.Query<TimelineItemDto>(query).ToList();
+
+    if (items.Count == 0)
+    {
+        return Results.Content("<p>まだタイムラインに記録がありません。</p>", "text/html");
+    }
+
+    foreach (var item in items)
+    {
+        item.Reactions = connection.Query<ReactionSummaryDto>(
+            "SELECT ReactionType AS Emoji, COUNT(1) AS Count FROM Likes WHERE ExecutionLogId = @LogId GROUP BY ReactionType",
+            new { LogId = item.LogId }).ToList();
+
+        item.Comments = connection.Query<CommentDto>(
+            "SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt FROM Comments c INNER JOIN Users u ON c.UserId = u.Id WHERE c.ExecutionLogId = @LogId ORDER BY c.Id ASC",
+            new { LogId = item.LogId }).ToList();
+    }
+
+    var html = string.Join("", items.Select(item => RenderTimelineItemHtml(item, currentUserId)));
+    return Results.Content(html, "text/html");
+});
+
+/// <summary>
+/// htmx 用: リアクション切り替え後に更新後のタイムラインアイテム HTML を返します。
+/// </summary>
+app.MapPost("/htmx/logs/{logId:int}/reactions", (HttpContext context, int logId, string emoji) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    if (!string.IsNullOrWhiteSpace(emoji))
+    {
+        int existingId = connection.ExecuteScalar<int>(
+            "SELECT Id FROM Likes WHERE ExecutionLogId = @ExecutionLogId AND UserId = @UserId AND ReactionType = @ReactionType",
+            new { ExecutionLogId = logId, UserId = currentUserId, ReactionType = emoji });
+
+        if (existingId > 0)
+        {
+            connection.Execute("DELETE FROM Likes WHERE Id = @Id", new { Id = existingId });
+        }
+        else
+        {
+            connection.Execute(
+                "INSERT INTO Likes (ExecutionLogId, UserId, ReactionType, CreatedAt) VALUES (@ExecutionLogId, @UserId, @ReactionType, @CreatedAt)",
+                new { ExecutionLogId = logId, UserId = currentUserId, ReactionType = emoji, CreatedAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") });
+        }
+    }
+
+    var item = connection.QuerySingleOrDefault<TimelineItemDto>(@"
+        SELECT el.Id AS LogId, el.HabitId, h.Title AS HabitTitle, h.Emoji AS HabitEmoji, el.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, el.ExecutedAt, el.Comment
+        FROM ExecutionLogs el JOIN Habits h ON el.HabitId = h.Id JOIN Users u ON el.UserId = u.Id WHERE el.Id = @LogId",
+        new { LogId = logId });
+
+    if (item == null) return Results.NotFound();
+
+    item.Reactions = connection.Query<ReactionSummaryDto>(
+        "SELECT ReactionType AS Emoji, COUNT(1) AS Count FROM Likes WHERE ExecutionLogId = @LogId GROUP BY ReactionType",
+        new { LogId = logId }).ToList();
+
+    item.Comments = connection.Query<CommentDto>(
+        "SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt FROM Comments c INNER JOIN Users u ON c.UserId = u.Id WHERE c.ExecutionLogId = @LogId ORDER BY c.Id ASC",
+        new { LogId = logId }).ToList();
+
+    return Results.Content(RenderTimelineItemHtml(item, currentUserId), "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: コメント投稿後に更新後のタイムラインアイテム HTML を返します。
+/// </summary>
+app.MapPost("/htmx/logs/{logId:int}/comments", (HttpContext context, int logId, [FromForm] string commentText) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    if (!string.IsNullOrWhiteSpace(commentText))
+    {
+        connection.Execute(
+            "INSERT INTO Comments (ExecutionLogId, UserId, CommentText, CreatedAt) VALUES (@ExecutionLogId, @UserId, @CommentText, @CreatedAt)",
+            new { ExecutionLogId = logId, UserId = currentUserId, CommentText = commentText.Trim(), CreatedAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") });
+    }
+
+    var item = connection.QuerySingleOrDefault<TimelineItemDto>(@"
+        SELECT el.Id AS LogId, el.HabitId, h.Title AS HabitTitle, h.Emoji AS HabitEmoji, el.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, el.ExecutedAt, el.Comment
+        FROM ExecutionLogs el JOIN Habits h ON el.HabitId = h.Id JOIN Users u ON el.UserId = u.Id WHERE el.Id = @LogId",
+        new { LogId = logId });
+
+    if (item == null) return Results.NotFound();
+
+    item.Reactions = connection.Query<ReactionSummaryDto>(
+        "SELECT ReactionType AS Emoji, COUNT(1) AS Count FROM Likes WHERE ExecutionLogId = @LogId GROUP BY ReactionType",
+        new { LogId = logId }).ToList();
+
+    item.Comments = connection.Query<CommentDto>(
+        "SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt FROM Comments c INNER JOIN Users u ON c.UserId = u.Id WHERE c.ExecutionLogId = @LogId ORDER BY c.Id ASC",
+        new { LogId = logId }).ToList();
+
+    return Results.Content(RenderTimelineItemHtml(item, currentUserId), "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: コメント削除後に更新後のタイムラインアイテム HTML を返します。
+/// </summary>
+app.MapDelete("/htmx/comments/{commentId:int}", (HttpContext context, int commentId, int logId) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    connection.Execute("DELETE FROM Comments WHERE Id = @Id", new { Id = commentId });
+
+    var item = connection.QuerySingleOrDefault<TimelineItemDto>(@"
+        SELECT el.Id AS LogId, el.HabitId, h.Title AS HabitTitle, h.Emoji AS HabitEmoji, el.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, el.ExecutedAt, el.Comment
+        FROM ExecutionLogs el JOIN Habits h ON el.HabitId = h.Id JOIN Users u ON el.UserId = u.Id WHERE el.Id = @LogId",
+        new { LogId = logId });
+
+    if (item == null) return Results.NotFound();
+
+    item.Reactions = connection.Query<ReactionSummaryDto>(
+        "SELECT ReactionType AS Emoji, COUNT(1) AS Count FROM Likes WHERE ExecutionLogId = @LogId GROUP BY ReactionType",
+        new { LogId = logId }).ToList();
+
+    item.Comments = connection.Query<CommentDto>(
+        "SELECT c.Id, c.ExecutionLogId, c.UserId, u.Name AS UserName, u.Emoji AS UserEmoji, c.CommentText, c.CreatedAt FROM Comments c INNER JOIN Users u ON c.UserId = u.Id WHERE c.ExecutionLogId = @LogId ORDER BY c.Id ASC",
+        new { LogId = logId }).ToList();
+
+    return Results.Content(RenderTimelineItemHtml(item, currentUserId), "text/html");
+});
+
+/// <summary>
+/// htmx 用: タスクチェック用の習慣一覧 HTML を返します。
+/// </summary>
+app.MapGet("/htmx/habits/check-list", (HttpContext context) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    var habits = connection.Query<Habit>(
+        "SELECT Id, UserId, Title, Description, Emoji, Frequency, CreatedAt FROM Habits WHERE UserId = @UserId ORDER BY Id DESC",
+        new { UserId = currentUserId }).ToList();
+
+    if (habits.Count == 0)
+    {
+        return Results.Content("<p>登録されている習慣がありません。</p>", "text/html");
+    }
+
+    var html = string.Join("", habits.Select(h => $@"
+        <article style=""margin-bottom: 1rem;"">
+            <form hx-post=""/htmx/habits/{h.Id}/execute"" hx-target=""#habits-check-list"" hx-swap=""innerHTML"" style=""margin-bottom: 0;"">
+                <div style=""display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;"">
+                    <div>
+                        <span style=""font-size: 1.3em;"">{System.Net.WebUtility.HtmlEncode(h.Emoji)}</span>
+                        <strong>{System.Net.WebUtility.HtmlEncode(h.Title)}</strong> ({System.Net.WebUtility.HtmlEncode(h.Frequency)})
+                        {(string.IsNullOrEmpty(h.Description) ? "" : $"<p style=\"margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;\">{System.Net.WebUtility.HtmlEncode(h.Description)}</p>")}
+                    </div>
+                    <div style=""display: flex; gap: 8px; align-items: center;"">
+                        <input type=""text"" name=""comment"" placeholder=""記録コメント（任意）"" style=""margin-bottom: 0; padding: 6px 10px; font-size: 0.9em;"">
+                        <button type=""submit"" style=""margin-bottom: 0; width: auto;"">✅ 実行</button>
+                    </div>
+                </div>
+            </form>
+        </article>"));
+
+    return Results.Content(html, "text/html");
+});
+
+/// <summary>
+/// htmx 用: 習慣のワンタップ実行とリスト更新 HTML を返します。
+/// </summary>
+app.MapPost("/htmx/habits/{id:int}/execute", (HttpContext context, int id, [FromForm] string? comment) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    string executedAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+    connection.Execute(
+        "INSERT INTO ExecutionLogs (HabitId, UserId, ExecutedAt, Comment) VALUES (@HabitId, @UserId, @ExecutedAt, @Comment)",
+        new { HabitId = id, UserId = currentUserId, ExecutedAt = executedAt, Comment = string.IsNullOrWhiteSpace(comment) ? "ワンタップ実行！" : comment.Trim() });
+
+    // 成功メッセージと習慣一覧を再取得して返却
+    var habits = connection.Query<Habit>(
+        "SELECT Id, UserId, Title, Description, Emoji, Frequency, CreatedAt FROM Habits WHERE UserId = @UserId ORDER BY Id DESC",
+        new { UserId = currentUserId }).ToList();
+
+    var alertHtml = "<mark style=\"display: block; margin-bottom: 1rem; padding: 8px; border-radius: 4px;\">🎉 習慣の実行を記録しました！</mark>";
+    var habitsHtml = string.Join("", habits.Select(h => $@"
+        <article style=""margin-bottom: 1rem;"">
+            <form hx-post=""/htmx/habits/{h.Id}/execute"" hx-target=""#habits-check-list"" hx-swap=""innerHTML"" style=""margin-bottom: 0;"">
+                <div style=""display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;"">
+                    <div>
+                        <span style=""font-size: 1.3em;"">{System.Net.WebUtility.HtmlEncode(h.Emoji)}</span>
+                        <strong>{System.Net.WebUtility.HtmlEncode(h.Title)}</strong> ({System.Net.WebUtility.HtmlEncode(h.Frequency)})
+                        {(string.IsNullOrEmpty(h.Description) ? "" : $"<p style=\"margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;\">{System.Net.WebUtility.HtmlEncode(h.Description)}</p>")}
+                    </div>
+                    <div style=""display: flex; gap: 8px; align-items: center;"">
+                        <input type=""text"" name=""comment"" placeholder=""記録コメント（任意）"" style=""margin-bottom: 0; padding: 6px 10px; font-size: 0.9em;"">
+                        <button type=""submit"" style=""margin-bottom: 0; width: auto;"">✅ 実行</button>
+                    </div>
+                </div>
+            </form>
+        </article>"));
+
+    return Results.Content(alertHtml + habitsHtml, "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: 設定画面用の習慣管理リスト HTML を返します。
+/// </summary>
+app.MapGet("/htmx/habits/manage-list", (HttpContext context) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    var habits = connection.Query<Habit>(
+        "SELECT Id, UserId, Title, Description, Emoji, Frequency, CreatedAt FROM Habits WHERE UserId = @UserId ORDER BY Id DESC",
+        new { UserId = currentUserId }).ToList();
+
+    if (habits.Count == 0)
+    {
+        return Results.Content("<p style=\"opacity: 0.8;\">登録されている習慣がありません。</p>", "text/html");
+    }
+
+    var html = string.Join("", habits.Select(h => $@"
+        <div style=""padding: 10px 0; border-bottom: 1px solid var(--pico-muted-border-color, #2d3843); display: flex; justify-content: space-between; align-items: center;"">
+            <div>
+                <span style=""font-size: 1.2em;"">{System.Net.WebUtility.HtmlEncode(h.Emoji)}</span>
+                <strong>{System.Net.WebUtility.HtmlEncode(h.Title)}</strong> ({System.Net.WebUtility.HtmlEncode(h.Frequency)})
+            </div>
+            <div>
+                <button hx-delete=""/htmx/habits/{h.Id}"" hx-target=""#manage-habits-list"" hx-swap=""innerHTML"" class=""contrast"" style=""padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;"">🗑️ 削除</button>
+            </div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+});
+
+/// <summary>
+/// htmx 用: 習慣の新規登録と管理リスト更新 HTML を返します。
+/// </summary>
+app.MapPost("/htmx/habits", (HttpContext context, [FromForm] string title, [FromForm] string? emoji, [FromForm] string? description, [FromForm] string frequency) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    if (!string.IsNullOrWhiteSpace(title))
+    {
+        connection.Execute(@"
+            INSERT INTO Habits (UserId, Title, Description, Emoji, Frequency, CreatedAt)
+            VALUES (@UserId, @Title, @Description, @Emoji, @Frequency, @CreatedAt);",
+            new
+            {
+                UserId = currentUserId,
+                Title = title.Trim(),
+                Description = description?.Trim(),
+                Emoji = string.IsNullOrWhiteSpace(emoji) ? "📝" : emoji.Trim(),
+                Frequency = string.IsNullOrWhiteSpace(frequency) ? "Daily" : frequency.Trim(),
+                CreatedAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            });
+    }
+
+    var habits = connection.Query<Habit>(
+        "SELECT Id, UserId, Title, Description, Emoji, Frequency, CreatedAt FROM Habits WHERE UserId = @UserId ORDER BY Id DESC",
+        new { UserId = currentUserId }).ToList();
+
+    var html = string.Join("", habits.Select(h => $@"
+        <div style=""padding: 10px 0; border-bottom: 1px solid var(--pico-muted-border-color, #2d3843); display: flex; justify-content: space-between; align-items: center;"">
+            <div>
+                <span style=""font-size: 1.2em;"">{System.Net.WebUtility.HtmlEncode(h.Emoji)}</span>
+                <strong>{System.Net.WebUtility.HtmlEncode(h.Title)}</strong> ({System.Net.WebUtility.HtmlEncode(h.Frequency)})
+            </div>
+            <div>
+                <button hx-delete=""/htmx/habits/{h.Id}"" hx-target=""#manage-habits-list"" hx-swap=""innerHTML"" class=""contrast"" style=""padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;"">🗑️ 削除</button>
+            </div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: 習慣の削除と管理リスト更新 HTML を返します。
+/// </summary>
+app.MapDelete("/htmx/habits/{id:int}", (HttpContext context, int id) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    connection.Open();
+    using var transaction = connection.BeginTransaction();
+    var logIds = connection.Query<int>("SELECT Id FROM ExecutionLogs WHERE HabitId = @HabitId", new { HabitId = id }, transaction).ToList();
+    if (logIds.Count > 0)
+    {
+        connection.Execute("DELETE FROM Likes WHERE ExecutionLogId IN @LogIds", new { LogIds = logIds }, transaction);
+        connection.Execute("DELETE FROM Comments WHERE ExecutionLogId IN @LogIds", new { LogIds = logIds }, transaction);
+        connection.Execute("DELETE FROM ExecutionLogs WHERE HabitId = @HabitId", new { HabitId = id }, transaction);
+    }
+    connection.Execute("DELETE FROM Habits WHERE Id = @Id", new { Id = id }, transaction);
+    transaction.Commit();
+
+    var habits = connection.Query<Habit>(
+        "SELECT Id, UserId, Title, Description, Emoji, Frequency, CreatedAt FROM Habits WHERE UserId = @UserId ORDER BY Id DESC",
+        new { UserId = currentUserId }).ToList();
+
+    if (habits.Count == 0)
+    {
+        return Results.Content("<p style=\"opacity: 0.8;\">登録されている習慣がありません。</p>", "text/html");
+    }
+
+    var html = string.Join("", habits.Select(h => $@"
+        <div style=""padding: 10px 0; border-bottom: 1px solid var(--pico-muted-border-color, #2d3843); display: flex; justify-content: space-between; align-items: center;"">
+            <div>
+                <span style=""font-size: 1.2em;"">{System.Net.WebUtility.HtmlEncode(h.Emoji)}</span>
+                <strong>{System.Net.WebUtility.HtmlEncode(h.Title)}</strong> ({System.Net.WebUtility.HtmlEncode(h.Frequency)})
+            </div>
+            <div>
+                <button hx-delete=""/htmx/habits/{h.Id}"" hx-target=""#manage-habits-list"" hx-swap=""innerHTML"" class=""contrast"" style=""padding: 4px 10px; font-size: 0.85em; width: auto; margin-bottom: 0;"">🗑️ 削除</button>
+            </div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+});
+
+/// <summary>
+/// htmx 用: 設定画面用の所属グループ一覧 HTML を返します。
+/// </summary>
+app.MapGet("/htmx/groups/list", (HttpContext context) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    var groups = connection.Query<GroupDto>(@"
+        SELECT g.Id, g.Name, g.InviteCode, g.CreatedAt
+        FROM Groups g INNER JOIN GroupMembers gm ON g.Id = gm.GroupId
+        WHERE gm.UserId = @UserId ORDER BY g.Id DESC;", new { UserId = currentUserId }).ToList();
+
+    if (groups.Count == 0)
+    {
+        return Results.Content("<p style=\"opacity: 0.8;\">所属しているグループはありません。</p>", "text/html");
+    }
+
+    var html = string.Join("", groups.Select(g => $@"
+        <div style=""padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; background: var(--pico-muted-border-color, #1e293b);"">
+            <div><strong>🏢 {System.Net.WebUtility.HtmlEncode(g.Name)}</strong></div>
+            <div><span style=""font-size: 0.85em; padding: 4px 8px; border-radius: 4px; background: var(--pico-card-background-color, #18232c);"">招待コード: <strong>{System.Net.WebUtility.HtmlEncode(g.InviteCode)}</strong></span></div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+});
+
+/// <summary>
+/// htmx 用: グループの新規作成と一覧更新 HTML を返します。
+/// </summary>
+app.MapPost("/htmx/groups", (HttpContext context, [FromForm] string name) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    if (!string.IsNullOrWhiteSpace(name))
+    {
+        string inviteCode = Guid.NewGuid().ToString("N")[..8].ToUpper();
+        string createdAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        int groupId = connection.ExecuteScalar<int>(
+            "INSERT INTO Groups (Name, InviteCode, CreatedAt) VALUES (@Name, @InviteCode, @CreatedAt); SELECT last_insert_rowid();",
+            new { Name = name.Trim(), InviteCode = inviteCode, CreatedAt = createdAt }, transaction);
+        connection.Execute("INSERT INTO GroupMembers (GroupId, UserId, Role) VALUES (@GroupId, @UserId, 'Admin');", new { GroupId = groupId, UserId = currentUserId }, transaction);
+        transaction.Commit();
+    }
+
+    var groups = connection.Query<GroupDto>(@"
+        SELECT g.Id, g.Name, g.InviteCode, g.CreatedAt
+        FROM Groups g INNER JOIN GroupMembers gm ON g.Id = gm.GroupId
+        WHERE gm.UserId = @UserId ORDER BY g.Id DESC;", new { UserId = currentUserId }).ToList();
+
+    var html = string.Join("", groups.Select(g => $@"
+        <div style=""padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; background: var(--pico-muted-border-color, #1e293b);"">
+            <div><strong>🏢 {System.Net.WebUtility.HtmlEncode(g.Name)}</strong></div>
+            <div><span style=""font-size: 0.85em; padding: 4px 8px; border-radius: 4px; background: var(--pico-card-background-color, #18232c);"">招待コード: <strong>{System.Net.WebUtility.HtmlEncode(g.InviteCode)}</strong></span></div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: 招待コードでのグループ参加と一覧更新 HTML を返します。
+/// </summary>
+app.MapPost("/htmx/groups/join", (HttpContext context, [FromForm] string inviteCode) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    if (!string.IsNullOrWhiteSpace(inviteCode))
+    {
+        var group = connection.QuerySingleOrDefault<GroupDto>(
+            "SELECT Id, Name FROM Groups WHERE InviteCode = @InviteCode",
+            new { InviteCode = inviteCode.Trim().ToUpper() });
+
+        if (group != null)
+        {
+            bool isAlreadyMember = connection.ExecuteScalar<bool>(
+                "SELECT COUNT(1) FROM GroupMembers WHERE GroupId = @GroupId AND UserId = @UserId",
+                new { GroupId = group.Id, UserId = currentUserId });
+
+            if (!isAlreadyMember)
+            {
+                connection.Execute(
+                    "INSERT INTO GroupMembers (GroupId, UserId, Role) VALUES (@GroupId, @UserId, 'Member')",
+                    new { GroupId = group.Id, UserId = currentUserId });
+            }
+        }
+    }
+
+    var groups = connection.Query<GroupDto>(@"
+        SELECT g.Id, g.Name, g.InviteCode, g.CreatedAt
+        FROM Groups g INNER JOIN GroupMembers gm ON g.Id = gm.GroupId
+        WHERE gm.UserId = @UserId ORDER BY g.Id DESC;", new { UserId = currentUserId }).ToList();
+
+    var html = string.Join("", groups.Select(g => $@"
+        <div style=""padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; background: var(--pico-muted-border-color, #1e293b);"">
+            <div><strong>🏢 {System.Net.WebUtility.HtmlEncode(g.Name)}</strong></div>
+            <div><span style=""font-size: 0.85em; padding: 4px 8px; border-radius: 4px; background: var(--pico-card-background-color, #18232c);"">招待コード: <strong>{System.Net.WebUtility.HtmlEncode(g.InviteCode)}</strong></span></div>
+        </div>"));
+
+    return Results.Content(html, "text/html");
+}).DisableAntiforgery();
+
+/// <summary>
+/// htmx 用: プロフィール（絵文字）の更新 HTML を返します。
+/// </summary>
+app.MapPost("/htmx/users/profile", (HttpContext context, [FromForm] string emoji) =>
+{
+    string? username = context.User.Identity?.Name ?? "admin";
+    using var connection = new SqliteConnection(connectionString);
+    var currentUser = connection.QuerySingleOrDefault<User>("SELECT Id, Emoji FROM Users WHERE Name = @Name", new { Name = username });
+    int currentUserId = currentUser?.Id ?? 1;
+
+    string newEmoji = string.IsNullOrWhiteSpace(emoji) ? "👤" : emoji.Trim();
+    connection.Execute("UPDATE Users SET Emoji = @Emoji WHERE Id = @Id", new { Emoji = newEmoji, Id = currentUserId });
+
+    var html = $@"
+        <form hx-post=""/htmx/users/profile"" hx-target=""#user-profile-section"" hx-swap=""innerHTML"" style=""display: flex; align-items: center; gap: 10px; margin-bottom: 0;"">
+            <span style=""font-size: 1.1em; font-weight: bold;"">{System.Net.WebUtility.HtmlEncode(newEmoji)} {System.Net.WebUtility.HtmlEncode(username)}</span>
+            <input type=""text"" name=""emoji"" value=""{System.Net.WebUtility.HtmlEncode(newEmoji)}"" style=""width: 60px; text-align: center; font-size: 1.2em; margin-bottom: 0;"">
+            <button type=""submit"" style=""width: auto; margin-bottom: 0;"">絵文字更新</button>
+        </form>";
+
+    return Results.Content(html, "text/html");
+}).DisableAntiforgery();
 
 // ------------------------------------------------------------
 // タイムライン＆絵文字リアクション API エンドポイント

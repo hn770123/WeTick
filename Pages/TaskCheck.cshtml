@@ -7,180 +7,43 @@
 
 @*
     モジュール名: Pages/TaskCheck.cshtml
-    説明: タスク（習慣）の実行記録専用画面 Razor Page です。記録完了後にタイムライン画面へ移動します。
+    説明: タスク（習慣）のワンタップ実行記録画面 Razor Page です。
+          pico-classless.css と htmx を使用し、JavaScript や過剰な CSS なしで習慣を実行記録します。
 *@
 
 <style>
-    /* ボトムナビゲーション固定表示のための画面余白 */
-    body {
-        padding-bottom: 80px;
-    }
-
-    /* 画面下部固定ボトムナビゲーションバーのスタイル設定 */
+    body { padding-bottom: 70px; }
     .bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        display: flex;
-        justify-content: space-around;
-        align-items: center;
+        position: fixed; bottom: 0; left: 0; right: 0;
+        display: flex; justify-content: space-around;
         background-color: var(--pico-card-background-color, #18232c);
         border-top: 1px solid var(--pico-muted-border-color, #2d3843);
-        padding: 8px 0;
-        z-index: 1000;
-        margin: 0;
+        padding: 8px 0; z-index: 1000; margin: 0; text-align: center;
     }
-
-    .bottom-nav-item {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-decoration: none;
-        color: var(--pico-secondary, #94a3b8);
-        font-size: 0.8rem;
-        font-weight: bold;
-        flex: 1;
-        text-align: center;
-        padding: 4px 0;
-    }
-
-    .bottom-nav-item .nav-icon {
-        font-size: 1.4rem;
-        line-height: 1.2;
-    }
-
-    .bottom-nav-item.active {
-        color: var(--pico-primary, #3b82f6);
-    }
-
-    .bottom-nav-item:hover {
-        color: var(--pico-primary-hover, #60a5fa);
-    }
-
-    /* 習慣リスト補助スタイル */
-    .habit-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 0;
-        border-bottom: 1px solid var(--pico-muted-border-color, #2d3843);
-    }
-
-    .habit-item:last-child {
-        border-bottom: none;
-    }
+    .bottom-nav a { text-decoration: none; font-size: 0.85rem; font-weight: bold; flex: 1; color: var(--pico-secondary); }
+    .bottom-nav a.active { color: var(--pico-primary); }
 </style>
 
 <!-- ヘッダーバー -->
 <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-    <h2 style="margin: 0; font-size: 1.4rem;">習慣トラッカー - タスクのチェック</h2>
+    <h2 style="margin: 0; font-size: 1.4rem;">習慣トラッカー</h2>
     <div style="display: flex; align-items: center; gap: 12px;">
-        <small style="font-weight: bold;">ログイン中: @Model.CurrentUser</small>
+        <small style="font-weight: bold;">👤 @Model.CurrentUser</small>
         <a href="/Settings" role="button" class="secondary" style="margin-bottom: 0; padding: 4px 10px; font-size: 0.85rem;">⚙️ 設定</a>
     </div>
 </header>
 
 <!-- タスクのチェックセクション -->
 <section id="section-task-check">
-    <article>
-        <h3>✅ マイ習慣一覧（ワンタップ実行）</h3>
-        <div id="habits-list">読み込み中...</div>
-    </article>
+    <h3>✅ マイ習慣一覧（ワンタップ実行）</h3>
+    <div id="habits-check-list" hx-get="/htmx/habits/check-list" hx-trigger="load" hx-swap="innerHTML">
+        <p>読み込み中...</p>
+    </div>
 </section>
 
-<!-- ボトムナビゲーションバー（画面下部固定） -->
+<!-- ボトムナビゲーションバー -->
 <nav class="bottom-nav">
-    <a href="/" id="nav-timeline" class="bottom-nav-item">
-        <span class="nav-icon">👥</span>
-        <span class="nav-label">タイムライン</span>
-    </a>
-    <a href="/TaskCheck" id="nav-task-check" class="bottom-nav-item active">
-        <span class="nav-icon">✅</span>
-        <span class="nav-label">タスクのチェック</span>
-    </a>
-    <a href="/Settings" id="nav-settings" class="bottom-nav-item">
-        <span class="nav-icon">⚙️</span>
-        <span class="nav-label">設定</span>
-    </a>
+    <a href="/">👥 タイムライン</a>
+    <a href="/TaskCheck" class="active">✅ タスクチェック</a>
+    <a href="/Settings">⚙️ 設定</a>
 </nav>
-
-<script>
-    let currentUserId = 1;
-
-    /**
-     * ログイン中のユーザー情報を取得し、習慣一覧を読み込みます。
-     */
-    async function loadUser() {
-        const res = await fetch(`/api/users/me`);
-        if (res.ok) {
-            const u = await res.json();
-            currentUserId = u.id;
-        }
-    }
-
-    /**
-     * ユーザーの登録習慣一覧を取得・描画します。
-     */
-    async function loadHabits() {
-        const res = await fetch(`/api/habits?userId=${currentUserId}`);
-        const habits = await res.json();
-        const container = document.getElementById('habits-list');
-
-        if (!habits || habits.length === 0) {
-            container.innerHTML = '<p>登録されている習慣がありません。</p>';
-            return;
-        }
-
-        container.innerHTML = habits.map(h => `
-            <div class="habit-item" style="flex-wrap: wrap; gap: 10px;">
-                <div style="flex: 1; min-width: 200px;">
-                    <span style="font-size: 1.3em;">${escapeHtml(h.emoji || '📝')}</span>
-                    <strong>${escapeHtml(h.title)}</strong> (${escapeHtml(h.frequency)})
-                    ${h.description ? `<p style="margin: 4px 0 0; font-size: 0.9em; opacity: 0.8;">${escapeHtml(h.description)}</p>` : ''}
-                </div>
-                <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 280px; justify-content: flex-end;">
-                    <input type="text" id="habit-comment-${h.id}" placeholder="記録コメント（任意）" style="margin-bottom: 0; padding: 6px 10px; font-size: 0.9em; flex: 1;">
-                    <button style="margin-bottom: 0; width: auto;" onclick="executeHabit(${h.id})">✅ 実行</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    /**
-     * 習慣をワンタップ実行し、記録完了後にタイムラインページへ遷移します。
-     * @@param {number} habitId 習慣ID
-     */
-    async function executeHabit(habitId) {
-        const commentInput = document.getElementById(`habit-comment-${habitId}`);
-        const commentText = commentInput ? commentInput.value.trim() : '';
-
-        const res = await fetch(`/api/habits/${habitId}/execute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, comment: commentText || 'ワンタップ実行！' })
-        });
-
-        if (res.ok) {
-            alert('🎉 習慣の実行を記録しました！タイムラインに移動します。');
-            window.location.href = '/';
-        } else {
-            alert('実行記録の保存に失敗しました。');
-        }
-    }
-
-    /**
-     * HTMLエスケープ処理関数
-     */
-    function escapeHtml(str) {
-        if (!str) return '';
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-
-    async function init() {
-        await loadUser();
-        await loadHabits();
-    }
-
-    init();
-</script>
